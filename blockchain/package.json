@@ -1,0 +1,22 @@
+{
+  "name": "growthos-injective-proof-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "wallet:create": "node scripts/create-test-wallet.mjs",
+    "faucet:request": "node scripts/request-test-funds.mjs",
+    "faucet:wait": "node scripts/wait-for-test-funds.mjs",
+    "contract:check": "node scripts/check-contract.mjs",
+    "anchor:deploy": "node scripts/deploy-and-anchor.mjs",
+    "anchor:resume": "node scripts/anchor-existing.mjs",
+    "anchor:verify": "node scripts/verify-anchor.mjs"
+  },
+  "dependencies": {
+    "bech32": "2.0.0",
+    "dotenv": "17.2.3",
+    "ethers": "6.17.0"
+  },
+  "devDependencies": {
+    "solc": "0.8.30"
+  }
+}

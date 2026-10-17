@@ -1,0 +1,105 @@
+{
+  "request": {
+    "company": {
+      "company_name": "AI Customer Support Agent",
+      "industry": "AI Customer Support SaaS",
+      "website": "https://supportpilot.example.com",
+      "target_market": "North American SaaS companies with 20 to 500 employees",
+      "stage": "seed",
+      "monthly_revenue": "30000.00",
+      "currency": "USD"
+    },
+    "period": {
+      "start": "2026-07-01",
+      "end": "2026-07-31"
+    },
+    "market_demand": "45.0",
+    "execution_capability": "46.0"
+  },
+  "revenue": {
+    "source": "stripe",
+    "period": {
+      "start": "2026-07-01",
+      "end": "2026-07-31"
+    },
+    "currency": "USD",
+    "revenue": "30000.00",
+    "customers": 150,
+    "mrr": "30000.00",
+    "growth_rate_pct": "30.0",
+    "momentum_score": "80.0"
+  },
+  "google_ads": {
+    "source": "google_ads",
+    "period": {
+      "start": "2026-07-01",
+      "end": "2026-07-31"
+    },
+    "currency": "USD",
+    "campaigns": [
+      {
+        "campaign_id": "demo_google_search",
+        "campaign_name": "AI Support - Search",
+        "status": "ENABLED",
+        "spend": "12000.00",
+        "clicks": 3000,
+        "conversions": "120",
+        "conversion_value": "33600.00",
+        "roas": "2.8",
+        "cac": "100.0"
+      }
+    ],
+    "creatives": [],
+    "spend": "12000.00",
+    "clicks": 3000,
+    "conversions": "120",
+    "conversion_value": "33600.00",
+    "roas": "2.8",
+    "cac": "100.0",
+    "trend_pct": "2.0",
+    "cac_trend_pct": "0.0",
+    "efficiency_score": "95.3",
+    "problems": ["ROAS below target"]
+  },
+  "meta_ads": {
+    "source": "meta_ads",
+    "period": {
+      "start": "2026-07-01",
+      "end": "2026-07-31"
+    },
+    "currency": "USD",
+    "campaigns": [
+      {
+        "campaign_id": "demo_meta_prospecting",
+        "campaign_name": "Founder Prospecting",
+        "status": "ACTIVE",
+        "spend": "12000.00",
+        "clicks": 2500,
+        "conversions": "80",
+        "conversion_value": "24000.00",
+        "roas": "2.0",
+        "cac": "150.0"
+      }
+    ],
+    "creatives": [
+      {
+        "creative_id": "demo_video_01",
+        "creative_name": "Support Inbox Before and After",
+        "campaign_id": "demo_meta_prospecting",
+        "spend": "12000.00",
+        "clicks": 2500,
+        "conversions": "80"
+      }
+    ],
+    "spend": "12000.00",
+    "clicks": 2500,
+    "conversions": "80",
+    "conversion_value": "24000.00",
+    "roas": "2.0",
+    "cac": "150.0",
+    "trend_pct": "-15.0",
+    "cac_trend_pct": "50.0",
+    "efficiency_score": "76.7",
+    "problems": ["ROAS below target", "High CAC", "ROAS declining"]
+  }
+}

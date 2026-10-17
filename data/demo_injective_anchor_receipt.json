@@ -1,0 +1,13 @@
+{
+  "network": "injective-evm-testnet",
+  "chain_id": 1439,
+  "mode": "demo",
+  "batch_id": "growthos-demo-832e0a51089812bd",
+  "root_hash": "0x832e0a51089812bd28750b9907edcad9b4fb71d2ca6f30e5fc7a11d3382e75c2",
+  "record_count": 3,
+  "contract_address": "0xbB2fC40BAAeF4f495A581B43b33271fc5dAB18Bc",
+  "transaction_hash": "0x9c79a034467c5fe572dd99cdfca13e801df1be58951c9d9929a81ad89c797249",
+  "block_number": 136981934,
+  "explorer_url": "https://testnet-injective.cloud.blockscout.com/tx/0x9c79a034467c5fe572dd99cdfca13e801df1be58951c9d9929a81ad89c797249",
+  "verified_at": "2026-08-16T13:39:09.217475Z"
+}

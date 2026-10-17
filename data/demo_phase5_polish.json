@@ -1,0 +1,134 @@
+{
+  "script_id": "growthos-phase5-fixed-demo",
+  "fixed_case": true,
+  "total_duration_seconds": 180,
+  "case": {
+    "title": "AI Customer Support Startup",
+    "company_name": "AI Customer Support Agent",
+    "team_size": 5,
+    "mrr": "30000",
+    "currency": "USD",
+    "growth_problems": ["CAC rising", "AI visibility low"],
+    "founder_context": "No in-house Growth Team"
+  },
+  "data_sources": [
+    {
+      "provider": "stripe",
+      "label": "Stripe",
+      "signal": "$30k MRR · +30% growth",
+      "status": "connected"
+    },
+    {
+      "provider": "google_ads",
+      "label": "Google Ads",
+      "signal": "2.8x ROAS · $100 CAC",
+      "status": "connected"
+    },
+    {
+      "provider": "meta_ads",
+      "label": "Meta Ads",
+      "signal": "2.0x ROAS · $150 CAC",
+      "status": "connected"
+    }
+  ],
+  "diagnosis": {
+    "growth_score": "68",
+    "score_band": "Promising · two constraints",
+    "problems": [
+      {
+        "title": "CAC rising",
+        "evidence": "Meta Ads CAC rose 50% to $150 while ROAS declined to 2.0x.",
+        "source": "Google Ads + Meta Ads",
+        "severity": "high"
+      },
+      {
+        "title": "AI visibility low",
+        "evidence": "The company appeared in only 2 of 5 high-intent AI search prompts.",
+        "source": "GEO Agent",
+        "severity": "medium"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "kind": "create_campaign",
+      "title": "Create Campaign",
+      "agent": "Ads Agent",
+      "output": "A focused Google Search campaign with a $5k budget and a 3.2x ROAS target.",
+      "status": "ready_for_approval",
+      "guardrail": "Founder approval required before execution"
+    },
+    {
+      "kind": "geo_plan",
+      "title": "GEO Plan",
+      "agent": "GEO Agent",
+      "output": "A comparison-content plan for the missing high-intent AI search prompts.",
+      "status": "plan_ready",
+      "guardrail": "Evidence and rationale recorded in the Action Ledger"
+    }
+  ],
+  "future": [
+    {
+      "title": "Growth Passport",
+      "description": "A portable, founder-controlled record of verified growth execution.",
+      "availability": "future"
+    },
+    {
+      "title": "Growth Capital",
+      "description": "Capital matched to measurable growth readiness and trusted operating history.",
+      "availability": "future"
+    }
+  ],
+  "stages": [
+    {
+      "id": "problem",
+      "label": "Problem",
+      "title": "A five-person startup cannot hire a Growth Team.",
+      "start_seconds": 0,
+      "end_seconds": 30,
+      "objective": "Establish the founder's growth constraint in one sentence.",
+      "presenter_cue": "Open with the founder: $30k MRR, five people, but acquisition is getting more expensive and AI discovery is weak.",
+      "proof_points": ["Team: 5 people", "MRR: $30k", "CAC rising", "AI visibility low"]
+    },
+    {
+      "id": "connect_data",
+      "label": "Connect Data",
+      "title": "Three accounts become one operating picture.",
+      "start_seconds": 30,
+      "end_seconds": 60,
+      "objective": "Show the exact business sources without a setup detour.",
+      "presenter_cue": "Move once across Stripe, Google Ads, and Meta Ads. Each source contributes one decision-grade signal.",
+      "proof_points": ["Stripe", "Google Ads", "Meta Ads"]
+    },
+    {
+      "id": "diagnosis",
+      "label": "AI Diagnosis",
+      "title": "GrowthOS finds the two constraints behind the score.",
+      "start_seconds": 60,
+      "end_seconds": 120,
+      "objective": "Explain the Growth Score, then ground both problems in evidence.",
+      "presenter_cue": "Lead with 68 out of 100. Then connect the rising CAC to paid data and low visibility to the GEO scan.",
+      "proof_points": ["Growth Score: 68/100", "CAC: +50% on Meta", "AI visibility: 2 of 5 prompts"]
+    },
+    {
+      "id": "execution",
+      "label": "Agent Execution",
+      "title": "Two agents turn diagnosis into controlled action.",
+      "start_seconds": 120,
+      "end_seconds": 160,
+      "objective": "Show the campaign draft, GEO plan, approval gate, and auditability.",
+      "presenter_cue": "Contrast recommendation with execution: the GEO plan is ready, while the campaign remains protected by founder approval.",
+      "proof_points": ["Create Campaign", "GEO Plan", "Human approval", "Action Ledger"]
+    },
+    {
+      "id": "future",
+      "label": "Future",
+      "title": "Trusted growth execution becomes a portable asset.",
+      "start_seconds": 160,
+      "end_seconds": 180,
+      "objective": "Close on the future direction without presenting it as a current feature.",
+      "presenter_cue": "End with the bridge: today's trusted execution can become tomorrow's Growth Passport and Growth Capital layer.",
+      "proof_points": ["Growth Passport", "Growth Capital"]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "observations": [
+    {
+      "prompt": "Best AI customer support tools",
+      "cited_brands": ["Intercom", "AI Customer Support Agent", "Ada"]
+    },
+    {
+      "prompt": "AI support agents for SaaS companies",
+      "cited_brands": ["Intercom", "Ada", "Forethought"]
+    },
+    {
+      "prompt": "Customer support automation software comparison",
+      "cited_brands": ["Zendesk", "AI Customer Support Agent", "Ada"]
+    },
+    {
+      "prompt": "AI customer service platform for startup teams",
+      "cited_brands": ["Intercom", "Zendesk", "Ada"]
+    },
+    {
+      "prompt": "Best automated support agent for B2B SaaS",
+      "cited_brands": ["Forethought", "Intercom", "Ada"]
+    }
+  ]
+}
