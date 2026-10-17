@@ -124,6 +124,7 @@
   "visibility.demo": "範例公司在 5 個高意向 AI 回答中出現了 2 次。",
   "visibility.demoScore": "可見度評分",
   "visibility.demoHint": "切換到即時模式，檢查你自己的品牌。",
+  "visibility.publicHint": "此公開原型展示範例可見度資料。你自己的品牌檢測僅在私人工作區開放。",
   "visibility.brand": "品牌",
   "visibility.website": "網站",
   "visibility.category": "品類",

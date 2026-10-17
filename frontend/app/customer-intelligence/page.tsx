@@ -34,12 +34,16 @@ export default function CustomersPage() {
     <main className="page">
       <h1>{t("customers.title")}</h1>
       <p className="lead">{t("customers.subtitle")}</p>
-      <Insight analysis={analysis} commentsTitle={t("customers.comments")} />
+      <Insight analysis={analysis} commentsTitle={t("customers.comments")} localizeSample />
     </main>
   );
 }
 
-function Insight({ analysis, commentsTitle }: { analysis: FeedbackAnalysis; commentsTitle: string }) {
+function Insight({ analysis, commentsTitle, localizeSample = false }: {
+  analysis: FeedbackAnalysis;
+  commentsTitle: string;
+  localizeSample?: boolean;
+}) {
   const { t, tx } = useI18n();
   return (
     <>
@@ -72,7 +76,7 @@ function Insight({ analysis, commentsTitle }: { analysis: FeedbackAnalysis; comm
           {analysis.analyzed_signals.map((item, index) => (
             <li key={`${item.source}-${index}`}>
               <span className={`dot sentiment-${item.sentiment}`} title={tx(item.sentiment)} aria-hidden="true" />
-              <blockquote>{item.text}</blockquote>
+              <blockquote>{localizeSample ? tx(item.text) : item.text}</blockquote>
               <small>
                 {item.source === "x" ? "X" : "Reddit"} · {tx(item.sentiment)}
                 {item.topics.length > 0 && ` · ${item.topics.map((topic) => tx(topic)).join("、")}`}

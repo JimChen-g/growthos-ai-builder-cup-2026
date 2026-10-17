@@ -124,6 +124,7 @@
   "visibility.demo": "The sample business appears in 2 of 5 high-intent AI answers.",
   "visibility.demoScore": "Visibility score",
   "visibility.demoHint": "Switch to Live to check your own brand.",
+  "visibility.publicHint": "This public prototype shows sample visibility data. Checking your own brand is available only in a private workspace.",
   "visibility.brand": "Brand",
   "visibility.website": "Website",
   "visibility.category": "Category",

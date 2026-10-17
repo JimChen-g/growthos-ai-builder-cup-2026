@@ -15,6 +15,13 @@ account and the only executable competition action is explicitly simulated. A de
 labelled fallback is returned when Vertex is unavailable; it is never presented as a live model
 result.
 
+The public workspace is explicitly sample-only. The **AI Decision Demo** is a competition-specific
+addition, not a connected-account dashboard: its input is synthetic but its labelled Vertex result
+is real model inference. English, Simplified Chinese and Traditional Chinese cover both evidence
+and analysis, with separate language caches. Changing languages never approves an action. Public
+Actions leads to this session-isolated workflow; private/local deployments retain the original
+Live tools. The UI reads `/api/v1/capabilities` before restoring a saved workspace preference.
+
 The public prototype is deployed at
 [`https://reflected-jet-478308-t5.web.app/builder-cup/`](https://reflected-jet-478308-t5.web.app/builder-cup/).
 Local verification and the deployed Google Cloud acceptance record are reported separately. See

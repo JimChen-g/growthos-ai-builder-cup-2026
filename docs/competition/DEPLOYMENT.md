@@ -69,6 +69,32 @@ the verified project ID, Firebase project ID, Firestore database, Vertex locatio
 Two-session isolation, deployed multi-instance races, forced model failure and persistence across a
 new Cloud Run revision remain follow-up acceptance cases; they are not implied by the smoke test.
 
+## Public UX correction on 2026-10-17
+
+- Backend source `d34064f` deployed as `growthos-builder-cup-api-00002-znh`, serving 100% of
+  Cloud Run traffic. Hosting was released with its API rewrite pinned to that revision.
+- `/health` passed. Hosting `/api/v1/capabilities` returned `public_demo_only: true` and
+  `live_available: false`. CPU 1, memory 512 MiB, concurrency 20, max instances 2 and the dedicated
+  runtime identity were preserved.
+- An existing browser saved in Live mode was refreshed and safely restored to the public sample
+  workspace. The unavailable Live/Connections controls are absent; direct `/connections/` explains
+  the public limitation instead of making a forbidden account request.
+- The competition tab is now AI Decision Demo (AI 决策演示 / AI 決策示範). It is intentionally
+  separate from connected-account data and only appears in Sample mode in private deployments.
+- Real Vertex analyses in English, Simplified Chinese and Traditional Chinese passed browser
+  acceptance. Evidence, priority, reasons, both alternatives, metrics and missing information
+  followed the selected language. Switching language removed the previous-language result during
+  analysis; a repeat Traditional Chinese analysis returned a correctly labelled localized cache hit.
+- Simplified Chinese approval returned a localized simulated-execution record; Traditional Chinese
+  rejection returned a localized no-execution confirmation. No external account actions occurred.
+- Today, Growth, Actions, Customers and Visibility loaded through the public site. Public Actions
+  uses the session-isolated competition workflow, while shared legacy workflows, approvals and
+  ledgers are blocked server-side. Cross-user workflow read/approval denial is covered by API tests;
+  deployed multi-session and multi-instance race tests are still not claimed here.
+- Additional regression coverage includes expired Firebase token refresh, one bounded 401 retry,
+  validation-error normalization and safe offline asset caching. Static export routes now use
+  actual files and 404s instead of treating every missing asset as the home page.
+
 ## Project inventory on 2026-10-17
 
 - The target project and linked billing account are accessible in the owner console.

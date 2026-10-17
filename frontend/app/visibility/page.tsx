@@ -25,7 +25,7 @@ const providerNames: Partial<Record<ConnectorProvider, string>> = {
 };
 
 export default function VisibilityPage() {
-  const { mode } = useDataMode();
+  const { mode, capabilities } = useDataMode();
   const { t, tx } = useI18n();
   const [dashboard, setDashboard] = useState<GrowthDashboard | null>(null);
   const [failed, setFailed] = useState(false);
@@ -70,7 +70,7 @@ export default function VisibilityPage() {
           <p>{tx(plan.rationale)}</p>
         </section>
       )}
-      <p className="muted">{t("visibility.demoHint")}</p>
+      <p className="muted">{t(capabilities.public_demo_only ? "visibility.publicHint" : "visibility.demoHint")}</p>
     </main>
   );
 }

@@ -23,17 +23,18 @@ Labels used below:
 | DEV-10 | Deployed smoke verified | Hosting returned a labelled live Vertex result within the bounded request window. |
 | DEV-11 | Deployed smoke verified | Dedicated runtime account has only Vertex user and Datastore user roles; build context and browser-token scans passed. |
 | DEV-12 | Deployed smoke verified | Ten static routes were exported and `/builder-cup/` plus its same-origin `/api/**` rewrite passed. |
-| DEV-13 | Deployed smoke verified | Cloud Run revision `growthos-builder-cup-api-00001-rjk` serves 100% traffic; public `/health` passed. |
+| DEV-13 | Deployed smoke verified | Cloud Run revision `growthos-builder-cup-api-00002-znh` serves 100% traffic; public `/health` and Hosting `/api/v1/capabilities` passed. |
 | DEV-14 | Deployed smoke verified | Hosting, Cloud Run, Firestore, Anonymous Auth and Vertex completed one public analysis and simulated approval. |
 | DEV-15 | Verified locally | English, Simplified Chinese and Traditional Chinese judge path with sample/live/cache/fallback/simulated labels. |
-| DEV-16 | Partly deployed verified | 115 backend tests pass and deployed auth/analysis/approval passed; recovery and concurrency remain. |
+| DEV-16 | Partly deployed verified | 133 backend tests and 10 frontend runtime tests pass; deployed recovery and concurrency remain. |
 | DEV-17 | Not run | No efficiency percentages or productivity claims are reported. Requires deployed version and three paired repetitions per task. |
 | DEV-18 | In progress | Public URL, cloud revision and deployed smoke acceptance are recorded; deck/video/submission copy remains. |
 
 ## Verified commands
 
 - `python -m ruff check .`: passed.
-- `python -m pytest -q`: 115 passed.
+- `python -m pytest -q`: 133 passed.
+- `node --test frontend/tests/public-runtime.test.cjs`: 10 passed (token renewal, bounded 401 retry, validation errors and offline caching).
 - `npm ci`, `npm run typecheck`, `npm run build`: passed; ten static routes exported.
 - `npm audit --omit=dev --audit-level=high`: zero known vulnerabilities at the configured threshold.
 - Local Docker build/start/health request: passed.
