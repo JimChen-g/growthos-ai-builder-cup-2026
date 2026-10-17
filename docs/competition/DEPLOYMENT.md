@@ -1,7 +1,8 @@
 # Competition deployment runbook
 
-This runbook is intentionally not marked complete. Run it only after authenticating an account
-authorized for the dedicated competition project and confirming billing/quotas with the owner.
+This runbook is intentionally not marked complete. Owner-console access, project identity and a
+linked billing account were verified read-only on 2026-10-17. Run mutations only after confirming
+the allowed spend/credits and authenticating the same authorized identity in the deployment CLI.
 
 ## Intended topology
 
@@ -50,3 +51,11 @@ the verified project ID, Firebase project ID, Firestore database, Vertex locatio
 8. Run the public-repository scan again immediately before push.
 
 No cloud resource, public URL or live Vertex request has been asserted by this document.
+
+## Read-only inventory on 2026-10-17
+
+- The target project and linked billing account are accessible in the owner console.
+- Agent Platform API (Vertex AI) and Cloud Datastore API are enabled.
+- Cloud Run was not present in the enabled-service list inspected for this project.
+- Firebase association, Firestore database creation, Anonymous Auth, Cloud Run service identity,
+  deployment region, quotas and live model access are not yet accepted.
