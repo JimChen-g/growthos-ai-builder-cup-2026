@@ -293,7 +293,8 @@ python3 -m venv .venv
 | `API_PRINCIPAL_NAME` | Name recorded as the approver for token-authenticated decisions (default `founder`). |
 | `PUBLIC_DEMO_ONLY` | `true` refuses Connections, Live refresh and every `mode=live` request, for hosted demos. |
 | `CORS_ALLOW_ORIGINS` | Comma-separated frontend origins. |
-| `NEXT_PUBLIC_API_TOKEN` | Frontend sends it as the Bearer token. It is visible in the browser bundle, so treat it as a gate, not a secret, and combine it with `PUBLIC_DEMO_ONLY` for public deployments. |
+| `FIREBASE_AUTH_REQUIRED` | `true` requires a valid Firebase ID token for API requests. Use this with `FIREBASE_PROJECT_ID` in the hosted competition environment. |
+| `NEXT_PUBLIC_FIREBASE_*` | Public Firebase web-app identifiers used for anonymous sign-in. They are not backend credentials; authorization remains enforced by ID-token verification and Firestore rules. |
 
 Run the Phase 2 offline acceptance flow:
 
@@ -374,10 +375,12 @@ example churn or pricing) is outside the connected data.
 
 ## Repository policy
 
-- The GitHub repository must remain **private** during the competition submission period.
+- This repository is the separate, public competition copy. It must never share Git history,
+  remotes, credentials or private runtime data with the original private repository.
 - Never commit credentials, API keys, customer data, or local environment files.
 - Demo data under `data/` must be synthetic or explicitly approved for use.
-- Reviewer-access instructions are documented in [`docs/GITHUB_PRIVATE_REPOSITORY.md`](docs/GITHUB_PRIVATE_REPOSITORY.md).
+- Run the checks in [`docs/competition/PUBLICATION_AUDIT.md`](docs/competition/PUBLICATION_AUDIT.md)
+  before each public push.
 
 ## Phase 0 acceptance checklist
 
@@ -385,8 +388,8 @@ example churn or pricing) is outside the connected data.
 - [x] Technology direction and component boundaries recorded
 - [x] README sections prepared for Devpost reuse
 - [x] Local Git repository initialized
-- [x] Private GitHub repository created and initial commit pushed
-- [ ] Reviewer invitations sent at submission time
+- [x] Independent public competition repository created and clean history pushed
+- [x] Public repository can be read without reviewer invitations
 
 ## Phase 1 acceptance checklist
 
