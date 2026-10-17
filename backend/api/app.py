@@ -253,6 +253,18 @@ def create_app(
     async def health() -> dict[str, str]:
         return {"status": "ok", "phase": "5"}
 
+    @app.get("/api/v1/capabilities")
+    async def deployment_capabilities() -> JSONResponse:
+        """Expose only the workspace policy needed before client authentication."""
+
+        return JSONResponse(
+            {
+                "public_demo_only": app_settings.public_demo_only,
+                "live_available": not app_settings.public_demo_only,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.post(
         "/api/v1/competition/analyze",
         response_model=CompetitionDecision,

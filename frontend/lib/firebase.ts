@@ -1,7 +1,7 @@
-import { FirebaseApp, getApp, getApps, initializeApp } from "@firebase/app";
-import { getAuth, signInAnonymously } from "@firebase/auth";
+import { type FirebaseApp, getApp, getApps, initializeApp } from "@firebase/app";
+import { type User, getAuth, signInAnonymously } from "@firebase/auth";
 
-let signInPromise: Promise<string> | null = null;
+let signInPromise: Promise<User> | null = null;
 
 function configuredApp(): FirebaseApp | null {
   const config = {
@@ -14,21 +14,21 @@ function configuredApp(): FirebaseApp | null {
   return getApps().length ? getApp() : initializeApp(config);
 }
 
-export async function getFirebaseIdToken(): Promise<string | null> {
+export async function getFirebaseIdToken(forceRefresh = false): Promise<string | null> {
   if (typeof window === "undefined") return null;
   const app = configuredApp();
   if (!app) return null;
-  if (!signInPromise) {
-    signInPromise = (async () => {
-      const auth = getAuth(app);
-      const user = auth.currentUser ?? (await signInAnonymously(auth)).user;
-      return user.getIdToken();
-    })();
+  const auth = getAuth(app);
+  await auth.authStateReady();
+  let user = auth.currentUser;
+  if (!user) {
+    // Share concurrent sign-ins, but never keep a resolved ID token: tokens expire.
+    signInPromise ??= signInAnonymously(auth).then((credential) => credential.user);
+    try {
+      user = await signInPromise;
+    } finally {
+      signInPromise = null;
+    }
   }
-  try {
-    return await signInPromise;
-  } catch (error) {
-    signInPromise = null;
-    throw error;
-  }
+  return user.getIdToken(forceRefresh);
 }

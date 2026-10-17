@@ -4,8 +4,11 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+DecisionLanguage = Literal["en", "zh-Hans", "zh-Hant"]
 
 
 class DecisionSource(StrEnum):
@@ -60,6 +63,7 @@ class CompetitionAnalysisRequest(BaseModel):
 
     founder_goal: str = Field(min_length=1, max_length=500)
     evidence: list[EvidenceItem] = Field(min_length=2, max_length=30)
+    language: DecisionLanguage = "en"
 
     @model_validator(mode="after")
     def unique_evidence(self) -> "CompetitionAnalysisRequest":
@@ -90,6 +94,7 @@ class CompetitionDecision(BaseModel):
     evidence: list[EvidenceItem]
     source: DecisionSource
     model_id: str | None
+    language: DecisionLanguage = "en"
     cached: bool = False
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     approval_status: str = "pending"

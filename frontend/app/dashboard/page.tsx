@@ -18,7 +18,7 @@ import {
 import { type MessageKey, useI18n } from "../../lib/i18n";
 
 export default function GrowthPage() {
-  const { mode } = useDataMode();
+  const { mode, capabilities } = useDataMode();
   const [dashboard, setDashboard] = useState<GrowthDashboard | null>(null);
   const [ledger, setLedger] = useState<AgentActionLedger | null>(null);
   const [integrity, setIntegrity] = useState<AuditIntegrityStatus | null>(null);
@@ -37,15 +37,15 @@ export default function GrowthPage() {
     setLedger(null);
     setIntegrity(null);
     setFailed(false);
-    const requests: Array<Promise<unknown>> = [loadRecord()];
+    const requests: Array<Promise<unknown>> = capabilities.public_demo_only ? [] : [loadRecord()];
     if (mode === "demo") requests.push(getJson<GrowthDashboard>("/api/v1/dashboard").then(setDashboard));
     Promise.all(requests).catch(() => setFailed(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
+  }, [mode, capabilities.public_demo_only]);
 
   if (failed) return <PageState error />;
-  if (!ledger || !integrity || (mode === "demo" && !dashboard)) return <PageState />;
-  if (mode === "live") return <LiveGrowth ledger={ledger} integrity={integrity} onRecorded={loadRecord} />;
+  if ((!capabilities.public_demo_only && (!ledger || !integrity)) || (mode === "demo" && !dashboard)) return <PageState />;
+  if (mode === "live") return <LiveGrowth ledger={ledger!} integrity={integrity!} onRecorded={loadRecord} />;
   return <DemoGrowth dashboard={dashboard!} ledger={ledger} integrity={integrity} />;
 }
 
@@ -55,10 +55,11 @@ function DemoGrowth({
   integrity,
 }: {
   dashboard: GrowthDashboard;
-  ledger: AgentActionLedger;
-  integrity: AuditIntegrityStatus;
+  ledger: AgentActionLedger | null;
+  integrity: AuditIntegrityStatus | null;
 }) {
   const { t, tx } = useI18n();
+  const { capabilities } = useDataMode();
   return (
     <main className="page">
       <h1>{t("growth.title")}</h1>
@@ -87,7 +88,11 @@ function DemoGrowth({
                 <small>{tx(item.source_agent)}</small>
                 <p>{tx(item.rationale)}</p>
               </div>
-              {item.workflow_run_id && item.approval_status && (
+              {capabilities.public_demo_only && item.workflow_run_id ? (
+                <div className="row-side">
+                  <Link className="link" href="/builder-cup">{t("nav.builderCup")} →</Link>
+                </div>
+              ) : item.workflow_run_id && item.approval_status && (
                 <div className="row-side">
                   <StatusPill status={item.approval_status} />
                   <Link className="link" href={`/agent?runId=${encodeURIComponent(item.workflow_run_id)}`}>
@@ -100,7 +105,7 @@ function DemoGrowth({
         </ol>
       </section>
 
-      <ActionLedger ledger={ledger} integrity={integrity} />
+      {ledger && integrity && <ActionLedger ledger={ledger} integrity={integrity} />}
     </main>
   );
 }

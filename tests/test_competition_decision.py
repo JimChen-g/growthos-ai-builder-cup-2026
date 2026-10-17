@@ -1,11 +1,15 @@
 import asyncio
+import json
 from datetime import UTC, datetime
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
 from backend.api.security import workspace_id_for_uid
 from backend.models.competition import (
     CompetitionAnalysisRequest,
+    CompetitionDecision,
     DecisionAction,
     EvidenceItem,
     VertexDecisionPayload,
@@ -15,6 +19,7 @@ from backend.services.competition_decision import (
     CompetitionQuotaExceededError,
 )
 from backend.services.competition_store import InMemoryCompetitionStore
+from integrations.vertex_decision import VertexDecisionConfig, VertexDecisionGenerator
 
 
 class CountingStore(InMemoryCompetitionStore):
@@ -85,7 +90,7 @@ class FakeGenerator:
         return self.result
 
 
-def service(generator: FakeGenerator, *, store=None, session_limit: int = 20):
+def service(generator: FakeGenerator | None, *, store=None, session_limit: int = 20):
     return CompetitionDecisionService(
         store=store or InMemoryCompetitionStore(),
         generator=generator,
@@ -198,3 +203,145 @@ def test_workspace_id_is_stable_and_does_not_expose_firebase_uid() -> None:
     assert workspace == workspace_id_for_uid(uid)
     assert uid not in workspace
     assert len(workspace) == 32
+
+
+def test_analysis_language_defaults_to_english_and_rejects_unsupported_values() -> None:
+    original = request().model_dump(exclude={"language"})
+
+    assert CompetitionAnalysisRequest.model_validate(original).language == "en"
+    with pytest.raises(ValidationError):
+        CompetitionAnalysisRequest.model_validate({**original, "language": "zh"})
+
+
+@pytest.mark.asyncio
+async def test_decision_cache_is_separated_by_language_with_identical_evidence() -> None:
+    generator = FakeGenerator(payload())
+    selected = service(generator)
+    original = request()
+
+    for language in ("en", "zh-Hans", "zh-Hant"):
+        localized = original.model_copy(update={"language": language})
+        first = await selected.analyze("session-a", localized)
+        cached = await selected.analyze("session-a", localized)
+
+        assert first.source == "live_vertex"
+        assert cached.source == "cache"
+        assert first.language == cached.language == language
+        assert first.evidence == cached.evidence == original.evidence
+
+    assert generator.calls == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("language", "priority", "failure", "execution"),
+    [
+        ("zh-Hans", "审核证据 EV-CAC", "尚未配置", "已在模拟环境中记录批准的行动"),
+        ("zh-Hant", "檢視證據 EV-CAC", "尚未設定", "已在模擬環境中記錄核准的行動"),
+    ],
+)
+async def test_fallback_and_approval_retain_workflow_language_and_evidence(
+    language: str, priority: str, failure: str, execution: str
+) -> None:
+    selected = service(None)
+    original = request().model_copy(update={"language": language})
+    decision = await selected.analyze("session-a", original)
+    stored = await selected.get("session-a", decision.workflow_id)
+
+    assert decision.language == stored.language == language
+    assert decision.source == "deterministic_fallback"
+    assert decision.priority_problem.startswith(priority)
+    assert decision.failure_message.startswith(failure)
+    assert decision.evidence == original.evidence
+    assert [item.value for item in decision.evidence] == ["$120, +24%", "2.8x"]
+    assert decision.alternatives[0].execution_kind == "simulated_campaign"
+    assert decision.alternatives[1].execution_kind == "manual_recommendation"
+    assert decision.action_digest == stored.action_digest
+
+    approved = await selected.decide(
+        "session-a",
+        decision.workflow_id,
+        outcome="approve",
+        action_digest=decision.action_digest,
+        actor="anonymous:test",
+        reason=None,
+    )
+    assert approved.execution_result["message"].startswith(execution)
+    assert approved.action_digest == decision.action_digest
+    assert approved.alternatives == decision.alternatives
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [("zh-Hans", "无效的证据引用"), ("zh-Hant", "無效的證據引用")],
+)
+async def test_model_failure_is_localized(language: str, expected: str) -> None:
+    selected = service(FakeGenerator(payload("EV-INVENTED")))
+    result = await selected.analyze(
+        "session-a", request().model_copy(update={"language": language})
+    )
+
+    assert result.source == "deterministic_fallback"
+    assert expected in result.failure_message
+
+
+@pytest.mark.asyncio
+async def test_existing_workflow_without_language_remains_readable() -> None:
+    selected = service(FakeGenerator(payload()))
+    decision = await selected.analyze("session-a", request())
+    legacy = decision.model_dump(mode="json", exclude={"language"})
+
+    assert CompetitionDecision.model_validate(legacy).language == "en"
+    assert selected._from_store(legacy).action_digest == decision.action_digest
+
+
+class StaticTokenProvider:
+    async def access_token(self) -> str:
+        return "test-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [
+        ("en", "English"),
+        ("zh-Hans", "Simplified Chinese (简体中文); use simplified characters throughout"),
+        ("zh-Hant", "Traditional Chinese (繁體中文); use traditional characters throughout"),
+    ],
+)
+async def test_vertex_requests_selected_language_for_all_prose_fields(
+    language: str, expected: str
+) -> None:
+    original = request().model_copy(update={"language": language})
+
+    def handler(outbound: httpx.Request) -> httpx.Response:
+        body = json.loads(outbound.content)
+        instruction = body["systemInstruction"]["parts"][0]["text"]
+        assert f"Write every prose response field in {expected}" in instruction
+        for field in (
+            "priority_problem",
+            "priority_reason",
+            "title",
+            "rationale",
+            "observation_metric",
+            "missing_information",
+        ):
+            assert field in instruction
+        assert "Retain proper names" in instruction
+        assert "evidence_id references and execution_kind enum values unchanged" in instruction
+        prompt = body["contents"][0]["parts"][0]["text"]
+        evidence = json.loads(prompt.split("Evidence JSON: ", 1)[1])
+        assert evidence == [item.model_dump(mode="json") for item in original.evidence]
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": payload().model_dump_json()}]}}]},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        generator = VertexDecisionGenerator(
+            VertexDecisionConfig(project_id="test-project"),
+            client=client,
+            token_provider=StaticTokenProvider(),
+        )
+        assert await generator.analyze(original) == payload()

@@ -16,7 +16,7 @@ function greetingKey(): MessageKey {
 }
 
 export default function TodayPage() {
-  const { mode } = useDataMode();
+  const { mode, capabilities } = useDataMode();
   const { t, tx, locale } = useI18n();
   const [experience, setExperience] = useState<FounderExperience | null>(null);
   const [failed, setFailed] = useState(false);
@@ -74,7 +74,9 @@ export default function TodayPage() {
         <p>{tx(plan?.rationale ?? briefing.recommendation_reason)}</p>
         <div className="actions-row">
           <Link className="button" href="/dashboard">{t("home.seePlan")}</Link>
-          {pendingRun?.workflow_run_id && (
+          {capabilities.public_demo_only ? (
+            <Link className="link" href="/builder-cup">{t("nav.builderCup")} →</Link>
+          ) : pendingRun?.workflow_run_id && (
             <Link className="link" href={`/agent?runId=${encodeURIComponent(pendingRun.workflow_run_id)}`}>
               {t("home.pending")} →
             </Link>

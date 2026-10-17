@@ -8,8 +8,8 @@ import { type MessageKey, useI18n } from "../lib/i18n";
 import { useDataMode, WorkspaceModeSwitch } from "./DataModeContext";
 import { LanguageSwitch } from "./LanguageSwitch";
 
-const navigation: Array<{ href: string; label: MessageKey; liveOnly?: boolean }> = [
-  { href: "/builder-cup", label: "nav.builderCup" },
+const navigation: Array<{ href: string; label: MessageKey; liveOnly?: boolean; sampleOnly?: boolean }> = [
+  { href: "/builder-cup", label: "nav.builderCup", sampleOnly: true },
   { href: "/", label: "nav.today" },
   { href: "/dashboard", label: "nav.growth" },
   { href: "/agent", label: "nav.actions" },
@@ -19,11 +19,15 @@ const navigation: Array<{ href: string; label: MessageKey; liveOnly?: boolean }>
 ];
 
 export function AppShell({ children, footer }: Readonly<{ children: React.ReactNode; footer?: React.ReactNode }>) {
-  const pathname = usePathname();
-  const { mode } = useDataMode();
+  const pathname = usePathname().replace(/\/+$/, "") || "/";
+  const { mode, capabilities } = useDataMode();
   const { t } = useI18n();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const items = navigation.filter((item) => !item.liveOnly || mode === "live");
+  const items = navigation.filter((item) =>
+    (!item.liveOnly || (mode === "live" && capabilities.live_available)) &&
+    (!item.sampleOnly || mode === "demo")
+  );
+  const unavailableConnections = pathname === "/connections" && !capabilities.live_available;
 
   // Close the phone settings sheet whenever the page changes.
   useEffect(() => setSettingsOpen(false), [pathname]);
@@ -45,7 +49,7 @@ export function AppShell({ children, footer }: Readonly<{ children: React.ReactN
       <div className="control">
         <span>{t("mode.label")}</span>
         <WorkspaceModeSwitch />
-        <small>{mode === "demo" ? t("mode.demoHint") : t("mode.liveHint")}</small>
+        <small>{capabilities.public_demo_only ? t("mode.publicDemoHint") : mode === "demo" ? t("mode.demoHint") : t("mode.liveHint")}</small>
       </div>
       <div className="control">
         <span>{t("lang.label")}</span>
@@ -73,7 +77,7 @@ export function AppShell({ children, footer }: Readonly<{ children: React.ReactN
           <span className="brand-mark" aria-hidden="true" />
           <strong>GrowthOS</strong>
         </Link>
-        <span className={`mode-chip mode-${mode}`}>{mode === "demo" ? t("mode.demo") : t("mode.live")}</span>
+        <span className={`mode-chip mode-${mode}`}>{capabilities.public_demo_only ? t("mode.publicDemo") : mode === "demo" ? t("mode.demo") : t("mode.live")}</span>
         <button
           aria-controls="settings-sheet"
           aria-expanded={settingsOpen}
@@ -98,8 +102,16 @@ export function AppShell({ children, footer }: Readonly<{ children: React.ReactN
         </>
       )}
 
-      <div className="content">
-        {children}
+      <div className="content" key={mode}>
+        {unavailableConnections ? (
+          <main className="page">
+            <h1>{t("mode.publicConnectionsTitle")}</h1>
+            <p className="lead">{t("mode.publicConnectionsHint")}</p>
+            <div className="section">
+              <Link className="button" href="/builder-cup">{t("nav.builderCup")}</Link>
+            </div>
+          </main>
+        ) : children}
         {footer}
       </div>
 

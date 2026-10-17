@@ -11,6 +11,7 @@ from backend.models.competition import (
     CompetitionAnalysisRequest,
     CompetitionDecision,
     DecisionAction,
+    DecisionLanguage,
     DecisionSource,
     VertexDecisionPayload,
 )
@@ -20,6 +21,60 @@ from backend.services.competition_store import (
     InMemoryCompetitionStore,
 )
 from integrations.vertex_decision import VertexDecisionConfig, VertexDecisionGenerator
+
+_MESSAGES: dict[DecisionLanguage, dict[str, str]] = {
+    "en": {
+        "quota": "The public demo AI limit has been reached. Try again after the UTC reset.",
+        "unconfigured": "Live Vertex AI is not configured; a labeled fallback was used.",
+        "failed": (
+            "Live Vertex AI failed or returned invalid evidence references; "
+            "a labeled fallback was used."
+        ),
+        "executed": "Approved action recorded in the sandbox; no external account was changed.",
+        "priority": "Review the operating signal: {primary}",
+        "reason": (
+            "The live model result is unavailable, so this fallback only prioritizes the "
+            "first supplied evidence item and does not infer a cause."
+        ),
+        "experiment": "Run a bounded experiment for {primary}",
+        "experiment_reason": "Use the cited sample fact as the baseline and require approval.",
+        "experiment_metric": "Re-check {primary} after the observation window",
+        "investigation": "Investigate {secondary}",
+        "investigation_reason": "Collect more context before turning this signal into an action.",
+        "investigation_metric": "Document a verified update for {secondary}",
+        "missing": "Live model analysis is unavailable for this request.",
+    },
+    "zh-Hans": {
+        "quota": "公开体验的每日 AI 分析额度已用完，请在 UTC 零点额度重置后重试。",
+        "unconfigured": "尚未配置 Vertex AI 实时分析，当前显示已标注的备用建议。",
+        "failed": "Vertex AI 实时分析失败或返回了无效的证据引用，当前显示已标注的备用建议。",
+        "executed": "已在模拟环境中记录批准的行动，未更改任何外部账户。",
+        "priority": "审核证据 {primary} 反映的经营信号",
+        "reason": "实时模型结果暂不可用。此备用建议仅优先展示第一条证据，不推断其原因。",
+        "experiment": "针对证据 {primary} 开展小范围实验",
+        "experiment_reason": "以引用的样例事实为基准，获得人工批准后再开展模拟实验。",
+        "experiment_metric": "观察期结束后重新核实证据 {primary} 对应的指标",
+        "investigation": "进一步核查证据 {secondary}",
+        "investigation_reason": "收集更多背景信息后，再决定是否采取行动。",
+        "investigation_metric": "记录证据 {secondary} 对应的已核实进展",
+        "missing": "本次请求暂时无法获得实时模型分析。",
+    },
+    "zh-Hant": {
+        "quota": "公開體驗的每日 AI 分析額度已用完，請在 UTC 零點額度重設後重試。",
+        "unconfigured": "尚未設定 Vertex AI 即時分析，目前顯示已標示的備用建議。",
+        "failed": "Vertex AI 即時分析失敗或傳回無效的證據引用，目前顯示已標示的備用建議。",
+        "executed": "已在模擬環境中記錄核准的行動，未變更任何外部帳戶。",
+        "priority": "檢視證據 {primary} 反映的營運訊號",
+        "reason": "即時模型結果暫時無法取得。此備用建議僅優先呈現第一項證據，不推斷其原因。",
+        "experiment": "針對證據 {primary} 進行小範圍實驗",
+        "experiment_reason": "以引用的範例事實為基準，取得人工核准後再進行模擬實驗。",
+        "experiment_metric": "觀察期結束後重新核實證據 {primary} 對應的指標",
+        "investigation": "進一步查證證據 {secondary}",
+        "investigation_reason": "蒐集更多背景資訊後，再決定是否採取行動。",
+        "investigation_metric": "記錄證據 {secondary} 對應的已核實進展",
+        "missing": "本次請求暫時無法取得即時模型分析。",
+    },
+}
 
 
 class DecisionGenerator(Protocol):
@@ -53,6 +108,7 @@ class CompetitionDecisionService:
     async def analyze(
         self, session_id: str, request: CompetitionAnalysisRequest
     ) -> CompetitionDecision:
+        messages = _MESSAGES[request.language]
         if len(request.evidence) > self.max_evidence_items:
             raise ValueError(f"at most {self.max_evidence_items} evidence items are allowed")
         cache_key = request.cache_key()
@@ -71,16 +127,14 @@ class CompetitionDecisionService:
                 global_limit=self.global_limit,
             )
             if not allowed:
-                raise CompetitionQuotaExceededError(
-                    "The public demo AI limit has been reached. Try again after the UTC reset."
-                )
+                raise CompetitionQuotaExceededError(messages["quota"])
             generated_at = datetime.now(UTC)
             model_id = self.model_id
             is_cached = False
             if self.generator is None:
                 payload = self._fallback(request)
                 source = DecisionSource.DETERMINISTIC_FALLBACK
-                failure_message = "Live Vertex AI is not configured; a labeled fallback was used."
+                failure_message = messages["unconfigured"]
             else:
                 try:
                     payload = await self.generator.analyze(request)
@@ -97,10 +151,7 @@ class CompetitionDecisionService:
                 except Exception:  # noqa: BLE001 - response remains explicit about degradation
                     payload = self._fallback(request)
                     source = DecisionSource.DETERMINISTIC_FALLBACK
-                    failure_message = (
-                        "Live Vertex AI failed or returned invalid evidence references; "
-                        "a labeled fallback was used."
-                    )
+                    failure_message = messages["failed"]
 
         self._validate_evidence_references(payload, request)
         workflow_id = str(uuid4())
@@ -111,6 +162,7 @@ class CompetitionDecisionService:
             evidence=request.evidence,
             source=source,
             model_id=model_id,
+            language=request.language,
             cached=is_cached,
             generated_at=generated_at,
             action_digest=action_digest,
@@ -154,7 +206,7 @@ class CompetitionDecisionService:
         result = {
             "kind": "simulated_execution",
             "status": "completed",
-            "message": "Approved action recorded in the sandbox; no external account was changed.",
+            "message": _MESSAGES[self._from_store(claimed).language]["executed"],
         }
         finished = await self.store.finish_execution(
             session_id,
@@ -184,30 +236,34 @@ class CompetitionDecisionService:
     @staticmethod
     def _fallback(request: CompetitionAnalysisRequest) -> VertexDecisionPayload:
         primary, secondary = request.evidence[:2]
+        messages = _MESSAGES[request.language]
+        # Canonical evidence is immutable. Refer to its ID rather than copying an arbitrary
+        # English label into Chinese prose or pretending to translate a user-supplied fact.
+        names = {
+            "primary": primary.label if request.language == "en" else primary.evidence_id,
+            "secondary": secondary.label if request.language == "en" else secondary.evidence_id,
+        }
         return VertexDecisionPayload(
-            priority_problem=f"Review the operating signal: {primary.label}",
-            priority_reason=(
-                "The live model result is unavailable, so this fallback only prioritizes the "
-                "first supplied evidence item and does not infer a cause."
-            ),
+            priority_problem=messages["priority"].format(**names),
+            priority_reason=messages["reason"],
             priority_evidence_ids=[primary.evidence_id],
             alternatives=[
                 DecisionAction(
-                    title=f"Run a bounded experiment for {primary.label}",
-                    rationale="Use the cited sample fact as the baseline and require approval.",
+                    title=messages["experiment"].format(**names),
+                    rationale=messages["experiment_reason"],
                     evidence_ids=[primary.evidence_id],
-                    observation_metric=f"Re-check {primary.label} after the observation window",
+                    observation_metric=messages["experiment_metric"].format(**names),
                     execution_kind="simulated_campaign",
                 ),
                 DecisionAction(
-                    title=f"Investigate {secondary.label}",
-                    rationale="Collect more context before turning this signal into an action.",
+                    title=messages["investigation"].format(**names),
+                    rationale=messages["investigation_reason"],
                     evidence_ids=[secondary.evidence_id],
-                    observation_metric=f"Document a verified update for {secondary.label}",
+                    observation_metric=messages["investigation_metric"].format(**names),
                     execution_kind="manual_recommendation",
                 ),
             ],
-            missing_information=["Live model analysis is unavailable for this request."],
+            missing_information=[messages["missing"]],
         )
 
     @staticmethod

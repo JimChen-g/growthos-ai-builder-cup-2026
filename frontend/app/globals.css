@@ -53,7 +53,12 @@ button, input, textarea, select { font: inherit; color: inherit; }
   padding: 36px 20px 28px;
   border-right: 1px solid var(--line);
   background: var(--sidebar);
+  overflow-y: auto;
 }
+.sidebar > * { flex-shrink: 0; }
+.workspace-boot { max-width: 760px; margin: 12vh auto; padding: 32px; }
+.workspace-boot .button { margin-top: 24px; }
+.workspace-fixed { color: var(--accent); font-size: 0.85rem; }
 .brand { display: flex; align-items: center; gap: 12px; padding-inline: 10px; }
 .brand strong { display: block; font-size: 0.95rem; font-weight: 600; letter-spacing: -0.01em; }
 .brand small { display: block; color: var(--muted); font-size: 0.72rem; }
@@ -275,6 +280,8 @@ textarea:focus, input:focus, select:focus { outline: none; border-color: var(--a
 .facts dt { color: var(--muted); font-size: 0.8rem; }
 .facts dd { margin: 4px 0 0; font-size: 1.15rem; font-variant-numeric: tabular-nums; }
 .facts.stacked { grid-template-columns: 1fr; }
+.decision-demo .facts dd small { display: block; margin-top: 4px; color: var(--muted); }
+.decision-demo .language-hint { margin-top: 12px; }
 .facts.stacked dd { font-size: 0.92rem; color: var(--soft); }
 .proposal .note { margin-top: 20px; }
 .outcome { margin-top: 24px; color: var(--soft); }

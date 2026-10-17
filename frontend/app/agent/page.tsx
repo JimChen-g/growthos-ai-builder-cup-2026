@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { ActionLedger } from "../../components/ActionLedger";
@@ -51,6 +52,25 @@ type WorkflowRun = {
 };
 
 export default function ActionsPage() {
+  const { capabilities } = useDataMode();
+  const { t } = useI18n();
+
+  if (capabilities.public_demo_only) {
+    return (
+      <main className="page">
+        <h1>{t("actions.title")}</h1>
+        <p className="lead">{t("actions.public.title")}</p>
+        <p className="muted">{t("actions.public.body")}</p>
+        <div className="actions-row">
+          <Link className="button" href="/builder-cup">{t("nav.builderCup")}</Link>
+        </div>
+      </main>
+    );
+  }
+  return <PrivateActionsPage />;
+}
+
+function PrivateActionsPage() {
   const { mode } = useDataMode();
   const { t, tx, locale, lang } = useI18n();
   const [message, setMessage] = useState(t("actions.defaultMessage"));

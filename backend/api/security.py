@@ -27,8 +27,15 @@ from backend.config import Settings
 logger = logging.getLogger(__name__)
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
-_PUBLIC_PATHS = {"/health"}
+_PUBLIC_PATHS = {"/health", "/api/v1/capabilities"}
 _LIVE_ONLY_PREFIXES = ("/api/v1/connections", "/api/v1/growth-intelligence")
+_SHARED_WORKSPACE_PREFIXES = (
+    "/api/v1/workflows",
+    "/api/v1/approvals",
+    "/api/v1/audit-log",
+    "/api/v1/audit-proof",
+    "/api/v1/intelligence-history",
+)
 LOCAL_PRINCIPAL = "local"
 TOKEN_PRINCIPAL = "token"
 FIREBASE_PRINCIPAL = "firebase"
@@ -128,6 +135,20 @@ def install_access_control(app: FastAPI, settings: Settings) -> None:
         ):
             return JSONResponse(
                 {"detail": "This deployment serves the Demo workspace only."},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        if settings.public_demo_only and (
+            path.startswith(_SHARED_WORKSPACE_PREFIXES)
+            or (
+                request.method not in {"GET", "HEAD"}
+                and not path.startswith("/api/v1/competition/")
+            )
+        ):
+            # Legacy local workflows and their ledgers share process-wide state. Public
+            # visitors may mutate only the competition routes, which scope every write
+            # and read to the authenticated Firebase workspace.
+            return JSONResponse(
+                {"detail": "Use the session-isolated AI decision demo for public actions."},
                 status_code=status.HTTP_403_FORBIDDEN,
             )
         return await call_next(request)

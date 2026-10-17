@@ -24,6 +24,7 @@ export type CompetitionAction = {
 };
 
 export type CompetitionDecision = {
+  language: "en" | "zh-Hans" | "zh-Hant";
   workflow_id: string;
   priority_problem: string;
   priority_reason: string;
@@ -437,19 +438,34 @@ export async function getJson<T>(path: string): Promise<T> {
   return requestJson<T>(path);
 }
 
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const identityToken = await getFirebaseIdToken();
-  const response = await fetch(`${API_BASE}${path}`, {
+  const send = (token: string | null) => fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(identityToken ? { Authorization: `Bearer ${identityToken}` } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init.headers,
     },
   });
+  let response = await send(identityToken);
+  // A server-rejected identity never reaches the action handler, so a single
+  // refreshed-token retry is safe even for approval requests.
+  if (response.status === 401 && identityToken) response = await send(await getFirebaseIdToken(true));
   if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
-    throw new Error(payload?.detail ?? `Request failed with ${response.status}`);
+    const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+    const detail = payload?.detail;
+    const message = typeof detail === "string" ? detail : Array.isArray(detail)
+      ? detail.map((item) => typeof item?.msg === "string" ? item.msg : "Invalid input").join("; ")
+      : `Request failed with ${response.status}`;
+    throw new ApiError(message, response.status);
   }
   return (await response.json()) as T;
 }
