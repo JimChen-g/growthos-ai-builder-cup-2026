@@ -122,6 +122,8 @@ async def test_meta_live_test_reads_bounded_insights_without_mutation(tmp_path, 
 
     def handler(request):
         requests.append(request)
+        if not request.url.path.endswith("/insights"):
+            return httpx.Response(200, json={"currency": "USD"})
         return httpx.Response(200, json={"data": []})
 
     settings = app_settings(tmp_path)
@@ -137,13 +139,19 @@ async def test_meta_live_test_reads_bounded_insights_without_mutation(tmp_path, 
     assert response.json()["checked_live"] is True
     assert response.json()["success"] is True
     assert META_TOKEN not in response.text
-    assert len(requests) == 1
+    assert len(requests) == 2
     request = requests[0]
     assert request.method == "GET"
     assert request.url.path == "/v26.0/act_123/insights"
     assert dict(request.url.params) == {"fields": "spend", "date_preset": "yesterday", "limit": "1"}
     assert request.headers["Authorization"] == f"Bearer {META_TOKEN}"
     assert META_TOKEN not in str(request.url)
+    metadata = requests[1]
+    assert metadata.method == "GET"
+    assert metadata.url.path == "/v26.0/act_123"
+    assert dict(metadata.url.params) == {"fields": "currency"}
+    assert metadata.headers["Authorization"] == f"Bearer {META_TOKEN}"
+    assert META_TOKEN not in str(metadata.url)
 
 
 @pytest.mark.asyncio
@@ -204,6 +212,8 @@ async def test_growth_refresh_uses_saved_meta_connection(tmp_path, monkeypatch):
         tmp_path,
         stripe_secret_key="stripe-review-key",
         google_ads_customer_id="555",
+        google_ads_access_token="own-google-test-token",
+        google_ads_developer_token="own-google-developer-token",
         meta_ads_access_token="stale-server-token",
         meta_ads_ad_account_id="999",
         meta_ads_api_version="v25.0",

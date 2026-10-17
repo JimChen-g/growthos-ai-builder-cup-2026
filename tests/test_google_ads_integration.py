@@ -10,6 +10,8 @@ from integrations.models import DateRange
 
 def _google_handler(request: httpx.Request) -> httpx.Response:
     query = json.loads(request.content)["query"]
+    if "FROM customer" in query:
+        return httpx.Response(200, json={"results": [{"customer": {"currencyCode": "USD"}}]})
     current = "2026-01-01" in query
     metrics = (
         {

@@ -17,6 +17,7 @@ from backend.services.growth_score import (
     GrowthScoreResult,
 )
 from integrations.base import IntegrationAPIError, IntegrationTransportError
+from integrations.currency import AccountCurrencyMismatchError
 from integrations.google_ads import GoogleAdsIntegration, GoogleAdsIntegrationConfig
 from integrations.meta_ads import MetaAdsIntegration, MetaAdsIntegrationConfig
 from integrations.metrics import (
@@ -119,6 +120,7 @@ class GrowthIntelligenceReport(BaseModel):
     meta_ads: AdsSnapshot
     growth_score: GrowthScoreResult
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    audit_recorded: bool = True
 
 
 class GrowthSourceError(RuntimeError):
@@ -137,16 +139,18 @@ class GrowthSourceError(RuntimeError):
             "meta_ads": "Meta Ads",
         }
         label = labels[provider]
+        if isinstance(error, AccountCurrencyMismatchError):
+            return f"{label}: {error}"
         if isinstance(error, IntegrationAPIError) and error.status_code in {401, 403}:
             if provider == "google_ads":
                 return (
                     "Google Ads sign-in has expired or lost permission. "
-                    "Update the Google Ads OAuth settings on the GrowthOS server "
+                    "Update the Google Ads OAuth settings in Connections "
                     "(a refresh token prevents hourly expiry), then load Live data again."
                 )
             return (
-                f"{label} rejected the server credentials. "
-                f"Update the {label} settings on the GrowthOS server, then try again."
+                f"{label} rejected the saved credentials. "
+                f"Update the {label} settings in Connections, then try again."
             )
         if isinstance(error, IntegrationTransportError):
             return f"{label} could not be reached. Wait a moment, then try again."
@@ -217,6 +221,11 @@ class GrowthIntelligenceService:
         revenue = cast(RevenueSnapshot, collected[0])
         google_ads = cast(AdsSnapshot, collected[1])
         meta_ads = cast(AdsSnapshot, collected[2])
+        if google_ads.currency != meta_ads.currency:
+            raise ValueError(
+                "live mode requires matching Google Ads and Meta Ads currencies; "
+                "automatic currency conversion is not available"
+            )
         inputs = GrowthScoreInputs.from_snapshots(
             revenue=revenue,
             ads=[google_ads, meta_ads],
@@ -247,7 +256,8 @@ def load_company_profile(path: Path) -> CompanyProfile:
     return CompanyProfile.model_validate_json(resolved.read_text(encoding="utf-8"))
 
 
-def _required_live_settings(settings: Settings) -> None:
+def validate_live_configuration(settings: Settings) -> None:
+    """Reject incomplete setup before consuming provider quota or making requests."""
     required = {
         "STRIPE_SECRET_KEY": settings.stripe_secret_key,
         "GOOGLE_ADS_ACCESS_TOKEN or GOOGLE_ADS_REFRESH_TOKEN": (
@@ -272,6 +282,11 @@ def _required_live_settings(settings: Settings) -> None:
             missing.append(name)
     if missing:
         raise ValueError(f"live mode is missing configuration: {', '.join(missing)}")
+    if settings.google_ads_currency.upper() != settings.meta_ads_currency.upper():
+        raise ValueError(
+            "live mode requires matching Google Ads and Meta Ads currencies; "
+            "automatic currency conversion is not available"
+        )
 
 
 async def run_growth_intelligence(
@@ -291,7 +306,7 @@ async def run_growth_intelligence(
         )
         return await service.analyze(case.request, mode=mode)
 
-    _required_live_settings(settings)
+    validate_live_configuration(settings)
     current_date = today or datetime.now(UTC).date()
     period = DateRange(
         start=current_date - timedelta(days=settings.analysis_days - 1),

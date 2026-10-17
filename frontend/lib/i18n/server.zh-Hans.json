@@ -1,5 +1,6 @@
 {
   "exact": {
+    "The account currency does not match the saved reporting currency. Update the connection currency and test again.": "账户币种与保存的报表币种不一致，请更新连接币种后重新测试。",
     "Paste your own Vertex AI API key": "粘贴你自己的 Vertex AI API 密钥",
     "Workspace-owned OAuth or access token + developer token": "当前工作区的 OAuth 凭据或访问令牌 + 开发者令牌",
     "Connect a restricted Stripe key": "连接 Stripe 受限密钥",

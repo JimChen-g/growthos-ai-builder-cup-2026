@@ -319,9 +319,13 @@ async def test_business_connection_test_uses_only_bounded_reads(tmp_path, monkey
             return httpx.Response(200, json={"data": []})
         assert request.method == "POST"
         assert request.url.path.endswith("/customers/1234567890/googleAds:search")
-        assert json.loads(request.content)["query"] == "SELECT customer.id FROM customer LIMIT 1"
+        assert json.loads(request.content)["query"] == (
+            "SELECT customer.id, customer.currency_code FROM customer LIMIT 1"
+        )
         assert request.headers["authorization"] == "Bearer judge-own-access-token"
-        return httpx.Response(200, json={"results": [{"customer": {"id": "1234567890"}}]})
+        return httpx.Response(
+            200, json={"results": [{"customer": {"id": "1234567890", "currencyCode": "USD"}}]}
+        )
 
     monkeypatch.setattr(
         "backend.services.real_intelligence.httpx.AsyncClient",

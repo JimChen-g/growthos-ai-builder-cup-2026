@@ -8,11 +8,18 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, SecretStr, field_validator
 
+from backend.currency import normalize_stripe_currency
 from integrations.base import IntegrationAPIError, request_json
 from integrations.metrics import decimal_value, percent_change, revenue_momentum_score
 from integrations.models import DateRange, RevenueSnapshot
 
 CENT = Decimal("0.01")
+# Stripe charge/price minor units, not payout formatting. ISK and UGX intentionally
+# retain the two-decimal API representation; HUF and TWD charges do too.
+# https://docs.stripe.com/currencies#zero-decimal
+ZERO_DECIMAL_CURRENCIES = frozenset(
+    "BIF CLP DJF GNF JPY KMF KRW MGA PYG RWF VND VUV XAF XOF XPF".split()
+)
 
 
 class StripeIntegrationConfig(BaseModel):
@@ -28,7 +35,7 @@ class StripeIntegrationConfig(BaseModel):
     @field_validator("currency")
     @classmethod
     def normalize_currency(cls, value: str) -> str:
-        return value.lower()
+        return normalize_stripe_currency(value).lower()
 
 
 class StripeIntegration:
@@ -136,7 +143,7 @@ class StripeIntegration:
             ),
             Decimal("0"),
         )
-        return (minor_units / Decimal("100")).quantize(CENT, rounding=ROUND_HALF_UP)
+        return self._major_units(minor_units)
 
     def _is_eligible_charge(self, charge: dict[str, Any]) -> bool:
         return bool(
@@ -164,7 +171,15 @@ class StripeIntegration:
                     price.get("unit_amount_decimal", price.get("unit_amount"))
                 ) * decimal_value(item.get("quantity") or 1)
                 minor_units += self._to_monthly(amount, interval, interval_count)
-        return (minor_units / Decimal("100")).quantize(CENT, rounding=ROUND_HALF_UP)
+        return self._major_units(minor_units)
+
+    def _major_units(self, minor_units: Decimal) -> Decimal:
+        divisor = (
+            Decimal("1")
+            if self.config.currency.upper() in ZERO_DECIMAL_CURRENCIES
+            else Decimal("100")
+        )
+        return (minor_units / divisor).quantize(CENT, rounding=ROUND_HALF_UP)
 
     @staticmethod
     def _to_monthly(amount: Decimal, interval: str | None, count: Decimal) -> Decimal:

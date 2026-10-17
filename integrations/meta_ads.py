@@ -10,6 +10,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, SecretStr, field_validator
 
 from integrations.base import IntegrationAPIError, request_json
+from integrations.currency import normalize_currency_code, verify_account_currency
 from integrations.metrics import (
     ads_efficiency_score,
     campaign_performance,
@@ -59,7 +60,7 @@ class MetaAdsIntegrationConfig(BaseModel):
     @field_validator("currency")
     @classmethod
     def normalize_currency(cls, value: str) -> str:
-        return value.upper()
+        return normalize_currency_code(value)
 
 
 class MetaAdsIntegration:
@@ -88,12 +89,27 @@ class MetaAdsIntegration:
             await self._client.aclose()
 
     async def collect(self, period: DateRange) -> AdsSnapshot:
+        await self.verify_currency()
         current_rows, previous_rows = await asyncio.gather(
             self._insights(period), self._insights(period.previous_period())
         )
         campaigns, creatives = self._roll_up(current_rows)
         previous_campaigns, _ = self._roll_up(previous_rows)
         return self._snapshot(period, campaigns, creatives, previous_campaigns)
+
+    async def verify_currency(self) -> str:
+        """Verify the ad account's currency; Insights monetary values use that unit."""
+        payload = await request_json(
+            self._client,
+            self.provider,
+            "GET",
+            f"{str(self.config.api_base_url).rstrip('/')}/{self.config.api_version}"
+            f"/act_{self.config.ad_account_id}",
+            params={"fields": "currency"},
+            headers={"Authorization": f"Bearer {self.config.access_token.get_secret_value()}"},
+        )
+        currency = payload.get("currency") if isinstance(payload, dict) else None
+        return verify_account_currency(currency, self.config.currency)
 
     async def _insights(self, period: DateRange) -> list[dict[str, Any]]:
         url = (

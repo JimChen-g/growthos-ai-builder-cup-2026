@@ -87,6 +87,7 @@ from backend.services.growth_intelligence import (
     GrowthIntelligenceReport,
     GrowthSourceError,
     run_growth_intelligence,
+    validate_live_configuration,
 )
 from backend.services.intelligence_history import (
     FirestoreAuditLogService,
@@ -590,19 +591,26 @@ def create_app(
         try:
             connections = active_real_intelligence(request).connections
             selected_settings = await connections.growth_settings(tenant_id)
+            validate_live_configuration(selected_settings)
             await connections.consume_growth_quota(tenant_id)
             report = await run_growth_intelligence(selected_settings)
             if getattr(request.state, "principal", None) == FIREBASE_PRINCIPAL:
                 report = report.model_copy(update={"company": None})
-            await active_audit_log(request, DataMode.LIVE).record(
-                agent="Growth Intelligence Engine",
-                action=f"Measured Growth Score {report.growth_score.score}/100",
-                reason=(
-                    "Created a new growth baseline from connected revenue, "
-                    "marketing efficiency, market demand, and execution capability."
-                ),
-                status=AgentActionStatus.EXECUTED,
-            )
+            try:
+                async with timeout(3):
+                    await active_audit_log(request, DataMode.LIVE).record(
+                        agent="Growth Intelligence Engine",
+                        action=f"Measured Growth Score {report.growth_score.score}/100",
+                        reason=(
+                            "Created a new growth baseline from connected revenue, "
+                            "marketing efficiency, market demand, and execution capability."
+                        ),
+                        status=AgentActionStatus.EXECUTED,
+                    )
+            except Exception:
+                # Provider reads succeeded: preserve them without claiming an audit write.
+                logger.warning("Live growth report succeeded but audit persistence failed")
+                report = report.model_copy(update={"audit_recorded": False})
             return report
         except QuotaExceededError as error:
             raise HTTPException(
@@ -669,7 +677,7 @@ def create_app(
         tenant_id = request_live_workspace_id(request, tenant_id)
         try:
             return await active_real_intelligence(request).connections.save_secret(
-                tenant_id, provider, body.secret
+                tenant_id, provider, body.secret, currency=body.currency
             )
         except (VaultUnavailableError, UnsupportedConnectionError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error

@@ -2,6 +2,7 @@ import { firebaseIdentityKey, getFirebaseIdToken } from "./firebase";
 
 // Public hosting uses same-origin /api rewrites. Local development can opt into an explicit URL.
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+export const AUTH_SESSION_INVALID_EVENT = "growthos-session-invalid";
 
 export type NumberValue = number | string;
 
@@ -228,6 +229,7 @@ export type DemoScript = {
 };
 
 export type LiveGrowthIntelligence = {
+  audit_recorded?: boolean;
   data_source_mode: "live";
   company: {
     company_name: string;
@@ -314,6 +316,7 @@ export type ConnectionAccount = {
 };
 
 export type ConnectionStatus = {
+  currency?: string | null;
   provider: ConnectorProvider;
   display_name: string;
   category: string;
@@ -466,7 +469,23 @@ export async function requestJson<T>(path: string, init: RequestInit = {}): Prom
   const bodyMode = typeof init.body === "string" ? (() => { try { return JSON.parse(init.body).mode; } catch { return null; } })() : null;
   const registered = path.startsWith("/api/v1/connections") || path.startsWith("/api/v1/growth-intelligence") || /[?&]mode=live(?:&|$)/.test(path) || bodyMode === "live";
   const initialIdentity = firebaseIdentityKey();
-  const identityToken = await getFirebaseIdToken(false, registered);
+  const invalidateSession = () => {
+    if (registered && firebaseIdentityKey() === initialIdentity && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(AUTH_SESSION_INVALID_EVENT));
+    }
+  };
+  const tokenForRequest = async (force: boolean) => {
+    try { return await getFirebaseIdToken(force, registered); }
+    catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : error instanceof Error ? error.message : "";
+      if (["auth/registered-user-required", "auth/user-token-expired", "auth/invalid-user-token", "auth/user-disabled", "auth/user-not-found"].includes(code)) {
+        invalidateSession();
+        throw new ApiError("auth/session-expired", 401);
+      }
+      throw error;
+    }
+  };
+  const identityToken = await tokenForRequest(false);
   const identity = firebaseIdentityKey();
   const ensureIdentity = () => {
     if ((initialIdentity && initialIdentity !== identity) || firebaseIdentityKey() !== identity) {
@@ -489,11 +508,12 @@ export async function requestJson<T>(path: string, init: RequestInit = {}): Prom
   // A server-rejected identity never reaches the action handler, so a single
   // refreshed-token retry is safe even for approval requests.
   ensureIdentity();
-  if (response.status === 401 && identityToken) response = await send(await getFirebaseIdToken(true, registered));
+  if (response.status === 401 && identityToken) response = await send(await tokenForRequest(true));
   ensureIdentity();
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
     ensureIdentity();
+    if (response.status === 401 || response.status === 403) invalidateSession();
     const detail = payload?.detail;
     const message = typeof detail === "string" ? detail : Array.isArray(detail)
       ? detail.map((item) => typeof item?.msg === "string" ? item.msg : "Invalid input").join("; ")

@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { API_BASE, isWorkspaceSession, requestJson, type DataMode, type WorkspaceSession } from "../lib/api";
+import { API_BASE, AUTH_SESSION_INVALID_EVENT, isWorkspaceSession, requestJson, type DataMode, type WorkspaceSession } from "../lib/api";
 import { observeFirebaseIdentity, signInWithGoogle, signOutFirebase, type FirebaseIdentity } from "../lib/firebase";
 import { useI18n } from "../lib/i18n";
 import { Segmented } from "./Segmented";
@@ -17,6 +17,7 @@ type DataModeContextValue = {
   session: WorkspaceSession | null;
   sessionLoading: boolean;
   sessionError: boolean;
+  sessionExpired: boolean;
   authError: boolean;
   authPending: boolean;
   identity: FirebaseIdentity | null;
@@ -36,6 +37,7 @@ export function DataModeProvider({ children }: Readonly<{ children: ReactNode }>
   const [session, setSession] = useState<WorkspaceSession | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [sessionError, setSessionError] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [authError, setAuthError] = useState(false);
   const [authPending, setAuthPending] = useState(false);
   const [sessionAttempt, setSessionAttempt] = useState(0);
@@ -45,8 +47,20 @@ export function DataModeProvider({ children }: Readonly<{ children: ReactNode }>
     setSession(null);
     setSessionLoading(true);
     setSessionError(false);
+    setSessionExpired(false);
     setIdentity(nextIdentity);
   }), []);
+
+  useEffect(() => {
+    const invalidate = () => {
+      setSession(null);
+      setSessionLoading(false);
+      setSessionError(true);
+      setSessionExpired(true);
+    };
+    window.addEventListener(AUTH_SESSION_INVALID_EVENT, invalidate);
+    return () => window.removeEventListener(AUTH_SESSION_INVALID_EVENT, invalidate);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -94,7 +108,7 @@ export function DataModeProvider({ children }: Readonly<{ children: ReactNode }>
         if (!isWorkspaceSession(next)) {
           throw new Error("Invalid workspace session");
         }
-        if (!disposed) setSession(next);
+        if (!disposed) { setSession(next); setSessionExpired(false); }
       })
       .catch(() => { if (!disposed) { setSession(null); setSessionError(true); } })
       .finally(() => { window.clearTimeout(timeout); if (!disposed) setSessionLoading(false); });
@@ -107,6 +121,7 @@ export function DataModeProvider({ children }: Readonly<{ children: ReactNode }>
   }, [capabilities]);
   const login = useCallback(async () => {
     setAuthError(false);
+    setSessionExpired(false);
     setAuthPending(true);
     setSession(null);
     setSessionLoading(true);
@@ -131,10 +146,10 @@ export function DataModeProvider({ children }: Readonly<{ children: ReactNode }>
   }, [mode, capabilities]);
 
   const value = useMemo(() => capabilities ? ({
-    mode, setMode, capabilities, session, sessionLoading, sessionError, authError, authPending, identity: identity ?? null,
+    mode, setMode, capabilities, session, sessionLoading, sessionError, sessionExpired, authError, authPending, identity: identity ?? null,
     identityKey: `${identity?.uid ?? "guest"}:${session?.workspace_id ?? "pending"}:${mode}`,
     login, logout, retrySession,
-  }) : null, [mode, setMode, capabilities, session, sessionLoading, sessionError, authError, authPending, identity, login, logout, retrySession]);
+  }) : null, [mode, setMode, capabilities, session, sessionLoading, sessionError, sessionExpired, authError, authPending, identity, login, logout, retrySession]);
   if (failed) return (
     <main className="workspace-boot" role="alert">
       <h1>{t("mode.unavailableTitle")}</h1>

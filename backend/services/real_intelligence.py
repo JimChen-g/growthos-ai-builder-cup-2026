@@ -13,6 +13,7 @@ from pydantic import SecretStr
 
 from agents.feedback_agent import FeedbackAgent
 from backend.config import Settings
+from backend.currency import normalize_currency_code, normalize_stripe_currency
 from backend.models.connectors import (
     ConnectionAccount,
     ConnectionCenter,
@@ -45,6 +46,7 @@ from backend.services.connector_security import (
     TenantQuotaLimiter,
 )
 from integrations.base import IntegrationAPIError, IntegrationError
+from integrations.currency import AccountCurrencyMismatchError
 from integrations.geo_providers import (
     GeminiSearchConfig,
     GeminiSearchProvider,
@@ -57,6 +59,7 @@ from integrations.geo_providers import (
     VertexAISearchProvider,
 )
 from integrations.google_ads import GoogleAdsIntegration, GoogleAdsIntegrationConfig
+from integrations.meta_ads import MetaAdsIntegration, MetaAdsIntegrationConfig
 from integrations.social_sources import (
     RedditSearchFallback,
     RedditSearchFallbackConfig,
@@ -90,6 +93,14 @@ class ResolvedMetaAdsConnection:
     access_token: SecretStr
     ad_account_id: str
     api_version: str
+    currency: str
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedStripeConnection:
+    secret: SecretStr
+    currency: str
     source: str
 
 
@@ -112,6 +123,9 @@ class ConnectorCredentialResolver:
     async def secret(
         self, tenant_id: str, provider: ConnectorProvider
     ) -> tuple[SecretStr | None, str | None]:
+        if provider is ConnectorProvider.STRIPE:
+            connection = await self.stripe_connection(tenant_id)
+            return (connection.secret, connection.source) if connection else (None, None)
         stored = await self.vault.get(tenant_id, provider)
         if stored:
             return stored, "encrypted_vault"
@@ -125,6 +139,37 @@ class ConnectorCredentialResolver:
             ConnectorProvider.STRIPE: self.settings.stripe_secret_key,
         }.get(provider)
         return (environment, "server_environment") if environment else (None, None)
+
+    async def stripe_connection(self, tenant_id: str) -> ResolvedStripeConnection | None:
+        stored = await self.vault.get(tenant_id, ConnectorProvider.STRIPE)
+        if stored:
+            raw = stored.get_secret_value()
+            # Legacy records contained just the key and used USD for hosted accounts.
+            if raw.startswith("rk_"):
+                currency = (
+                    self.settings.stripe_currency
+                    if self.allows_server_credentials(tenant_id)
+                    else "USD"
+                )
+                return ResolvedStripeConnection(
+                    stored, normalize_stripe_currency(currency), "encrypted_vault"
+                )
+            try:
+                payload = json.loads(raw)
+                secret = payload["secret"]
+                currency = normalize_stripe_currency(payload["currency"])
+                if not isinstance(secret, str) or not secret.startswith("rk_"):
+                    raise ValueError("invalid key")
+            except (KeyError, TypeError, ValueError) as error:
+                raise CredentialVaultError("stored Stripe configuration is invalid") from error
+            return ResolvedStripeConnection(SecretStr(secret), currency, "encrypted_vault")
+        if not self.allows_server_credentials(tenant_id) or not self.settings.stripe_secret_key:
+            return None
+        return ResolvedStripeConnection(
+            self.settings.stripe_secret_key,
+            normalize_stripe_currency(self.settings.stripe_currency),
+            "server_environment",
+        )
 
     async def vertex_connection(self, tenant_id: str) -> ResolvedVertexAIConnection | None:
         stored = await self.vault.get(tenant_id, ConnectorProvider.GEMINI_VERTEX)
@@ -166,6 +211,7 @@ class ConnectorCredentialResolver:
                 access_token=payload.access_token,
                 ad_account_id=payload.ad_account_id,
                 api_version=payload.api_version,
+                currency=payload.currency,
                 source="encrypted_vault",
             )
         if not self.allows_server_credentials(tenant_id) or not all(
@@ -180,6 +226,7 @@ class ConnectorCredentialResolver:
             access_token=self.settings.meta_ads_access_token,
             ad_account_id=self.settings.meta_ads_ad_account_id.removeprefix("act_"),
             api_version=self.settings.meta_ads_api_version,
+            currency=normalize_currency_code(self.settings.meta_ads_currency),
             source="server_environment",
         )
 
@@ -206,6 +253,7 @@ class ConnectorCredentialResolver:
             client_id=self.settings.google_ads_client_id,
             client_secret=self.settings.google_ads_client_secret,
             refresh_token=self.settings.google_ads_refresh_token,
+            currency=self.settings.google_ads_currency,
         )
         return ResolvedGoogleAdsConnection(credentials, "server_environment")
 
@@ -304,6 +352,8 @@ class ConnectionCenterService:
         tenant_id: str,
         provider: ConnectorProvider,
         secret: SecretStr,
+        *,
+        currency: str | None = None,
     ) -> ConnectionStatus:
         if provider not in _CREDENTIAL_PROVIDERS:
             raise UnsupportedConnectionError(
@@ -311,6 +361,16 @@ class ConnectionCenterService:
             )
         if provider is ConnectorProvider.STRIPE and not secret.get_secret_value().startswith("rk_"):
             raise UnsupportedConnectionError("Use a restricted Stripe key with read-only access.")
+        if provider is ConnectorProvider.STRIPE:
+            existing = await self.resolver.stripe_connection(tenant_id)
+            selected_currency = normalize_stripe_currency(
+                currency or (existing.currency if existing else "USD")
+            )
+            secret = SecretStr(
+                json.dumps({"secret": secret.get_secret_value(), "currency": selected_currency})
+            )
+        elif currency is not None:
+            raise UnsupportedConnectionError("Currency is only supported for business connections.")
         await self.vault.put(tenant_id, provider, secret)
         center = await self.center(tenant_id)
         return next(item for item in center.connections if item.provider is provider)
@@ -343,6 +403,7 @@ class ConnectionCenterService:
             "access_token": request.access_token.get_secret_value(),
             "ad_account_id": request.ad_account_id,
             "api_version": request.api_version,
+            "currency": request.currency,
         }
         await self.vault.put(
             tenant_id,
@@ -380,6 +441,7 @@ class ConnectionCenterService:
         updates = {
             "data_source_mode": "live",
             "stripe_secret_key": None,
+            "stripe_currency": "USD",
             "google_ads_access_token": None,
             "google_ads_developer_token": None,
             "google_ads_customer_id": None,
@@ -387,9 +449,11 @@ class ConnectionCenterService:
             "google_ads_client_id": None,
             "google_ads_client_secret": None,
             "google_ads_refresh_token": None,
+            "google_ads_currency": "USD",
             "meta_ads_access_token": None,
             "meta_ads_ad_account_id": None,
             "meta_ads_api_version": None,
+            "meta_ads_currency": "USD",
         }
         if self.resolver.allows_server_credentials(tenant_id):
             # Preserve the local developer's partially completed configuration. Hosted
@@ -397,8 +461,10 @@ class ConnectionCenterService:
             for name in updates:
                 if name != "data_source_mode":
                     updates[name] = getattr(self.settings, name)
-        stripe, _ = await self.resolver.secret(tenant_id, ConnectorProvider.STRIPE)
-        updates["stripe_secret_key"] = stripe
+        stripe = await self.resolver.stripe_connection(tenant_id)
+        if stripe:
+            updates["stripe_secret_key"] = stripe.secret
+            updates["stripe_currency"] = stripe.currency
         google = await self.resolver.google_ads_connection(tenant_id)
         if google:
             for field, value in google.credentials.model_dump(mode="python").items():
@@ -408,6 +474,7 @@ class ConnectionCenterService:
                 meta_ads_access_token=connection.access_token,
                 meta_ads_ad_account_id=connection.ad_account_id,
                 meta_ads_api_version=connection.api_version,
+                meta_ads_currency=connection.currency,
             )
         return self.settings.model_copy(update=updates)
 
@@ -465,21 +532,11 @@ class ConnectionCenterService:
                             oauth_refresh_token=settings.google_ads_refresh_token,
                             api_version=settings.google_ads_api_version,
                             api_base_url=settings.google_ads_api_base_url,
+                            currency=settings.google_ads_currency,
                         ),
                         client=client,
                     )
-                    response = await client.post(
-                        f"{settings.google_ads_api_base_url.rstrip('/')}/{settings.google_ads_api_version}"
-                        f"/customers/{settings.google_ads_customer_id}/googleAds:search",
-                        headers=await adapter._headers(),
-                        json={"query": "SELECT customer.id FROM customer LIMIT 1"},
-                    )
-                    response.raise_for_status()
-                    payload = response.json()
-                    if not isinstance(payload, dict) or not isinstance(
-                        payload.get("results"), list
-                    ):
-                        raise ValueError("invalid provider response")
+                    await adapter.verify_currency()
         except (IntegrationError, httpx.HTTPError, ValueError, QuotaExceededError) as error:
             return ConnectionTestResult(
                 provider=provider,
@@ -555,6 +612,18 @@ class ConnectionCenterService:
                 success = False
                 message = "Meta returned an invalid Insights response."
             else:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    adapter = MetaAdsIntegration(
+                        MetaAdsIntegrationConfig(
+                            access_token=connection.access_token,
+                            ad_account_id=connection.ad_account_id,
+                            api_version=connection.api_version,
+                            api_base_url=self.settings.meta_ads_api_base_url,
+                            currency=connection.currency,
+                        ),
+                        client=client,
+                    )
+                    await adapter.verify_currency()
                 success = True
                 message = "Live Meta Ads read-only Insights request completed successfully."
         except QuotaExceededError as error:
@@ -563,6 +632,9 @@ class ConnectionCenterService:
         except httpx.HTTPError:
             success = False
             message = "Meta could not be reached. Try again."
+        except IntegrationError as error:
+            success = False
+            message = _safe_provider_error(error)
         return ConnectionTestResult(
             provider=ConnectorProvider.META_ADS,
             configured=True,
@@ -706,6 +778,7 @@ class ConnectionCenterService:
             auth_method="Workspace-owned OAuth or access token + developer token",
             configuration_source=connection.source if connection else None,
             selected_account_id=selected,
+            currency=connection.credentials.currency if connection else None,
             accounts=accounts,
             supports_live_test=True,
             setup_kind=ConnectionSetupKind.OAUTH,
@@ -740,6 +813,7 @@ class ConnectionCenterService:
             auth_method="Read-only Meta system-user access token",
             configuration_source=connection.source if connection else None,
             api_version=connection.api_version if connection else None,
+            currency=connection.currency if connection else None,
             selected_account_id=selected,
             accounts=accounts,
             supports_live_test=True,
@@ -758,8 +832,8 @@ class ConnectionCenterService:
         )
 
     async def _stripe_status(self, tenant_id: str) -> ConnectionStatus:
-        secret, source = await self.resolver.secret(tenant_id, ConnectorProvider.STRIPE)
-        configured = secret is not None
+        connection = await self.resolver.stripe_connection(tenant_id)
+        configured = connection is not None
         return ConnectionStatus(
             provider=ConnectorProvider.STRIPE,
             display_name="Stripe",
@@ -769,7 +843,8 @@ class ConnectionCenterService:
             ),
             configured=configured,
             auth_method="Restricted secret key",
-            configuration_source=source,
+            configuration_source=connection.source if connection else None,
+            currency=connection.currency if connection else None,
             supports_live_test=True,
             setup_kind=ConnectionSetupKind.RESTRICTED_KEY,
             setup_label="Connect a restricted Stripe key",
@@ -1211,6 +1286,8 @@ def _safe_provider_error(error: Exception) -> str:
     """Never return raw provider exceptions, URLs, request payloads or secrets to browsers."""
     if isinstance(error, QuotaExceededError):
         return "Daily provider usage limit reached. Try again tomorrow."
+    if isinstance(error, AccountCurrencyMismatchError):
+        return str(error)
     if isinstance(error, TimeoutError):
         return "The provider request timed out. Retry the unavailable prompts."
     status = (

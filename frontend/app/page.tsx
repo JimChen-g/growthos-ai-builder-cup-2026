@@ -106,6 +106,7 @@ function LiveToday() {
     <main className="page">
       <h1>{ready === 3 ? t("home.live.readyTitle") : t("home.live.title")}</h1>
       <p className="lead">{t("home.live.body")}</p>
+      <p className="note">{t("home.live.configurationOnly")}</p>
       <div className="progress" aria-label={t("home.live.progress", { n: ready })}>
         {[0, 1, 2].map((index) => (
           <span className={index < ready ? "on" : undefined} key={index} />

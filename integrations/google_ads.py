@@ -18,6 +18,7 @@ from pydantic import (
 )
 
 from integrations.base import IntegrationAPIError, request_json
+from integrations.currency import normalize_currency_code, verify_account_currency
 from integrations.metrics import (
     ads_efficiency_score,
     campaign_performance,
@@ -74,7 +75,7 @@ class GoogleAdsIntegrationConfig(BaseModel):
     @field_validator("currency")
     @classmethod
     def normalize_currency(cls, value: str) -> str:
-        return value.upper()
+        return normalize_currency_code(value)
 
     @model_validator(mode="after")
     def require_credentials(self) -> "GoogleAdsIntegrationConfig":
@@ -171,12 +172,31 @@ class GoogleAdsIntegration:
             await self._client.aclose()
 
     async def collect(self, period: DateRange) -> AdsSnapshot:
+        await self.verify_currency()
         current_rows, previous_rows = await asyncio.gather(
             self._search(period), self._search(period.previous_period())
         )
         campaigns = self._campaigns(current_rows)
         previous_campaigns = self._campaigns(previous_rows)
         return self._snapshot(period, campaigns, previous_campaigns)
+
+    async def verify_currency(self) -> str:
+        """Read the immutable account currency before labeling any monetary metrics."""
+        payload = await request_json(
+            self._client,
+            self.provider,
+            "POST",
+            f"{str(self.config.api_base_url).rstrip('/')}/{self.config.api_version}"
+            f"/customers/{self.config.customer_id}/googleAds:search",
+            headers=await self._headers(),
+            json={"query": "SELECT customer.id, customer.currency_code FROM customer LIMIT 1"},
+        )
+        rows = payload.get("results") if isinstance(payload, dict) else None
+        if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+            raise IntegrationAPIError(self.provider, None, "API returned invalid account metadata")
+        customer = rows[0].get("customer")
+        currency = customer.get("currencyCode") if isinstance(customer, dict) else None
+        return verify_account_currency(currency, self.config.currency)
 
     async def create_campaign(
         self, request: GoogleAdsCampaignCreateRequest

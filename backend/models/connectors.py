@@ -15,6 +15,8 @@ from pydantic import (
     model_validator,
 )
 
+from backend.currency import normalize_currency_code, normalize_stripe_currency
+
 
 class DataMode(StrEnum):
     DEMO = "demo"
@@ -80,6 +82,7 @@ class ConnectionStatus(BaseModel):
     location: str | None = None
     api_version: str | None = None
     selected_account_id: str | None = None
+    currency: str | None = None
     accounts: list[ConnectionAccount] = Field(default_factory=list)
     supports_live_test: bool = False
     demo_available: bool = True
@@ -104,6 +107,12 @@ class ConnectorCredentialRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     secret: SecretStr
+    currency: str | None = None
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, value: str | None) -> str | None:
+        return normalize_stripe_currency(value) if value is not None else None
 
     @field_validator("secret")
     @classmethod
@@ -151,6 +160,12 @@ class MetaAdsConnectionRequest(BaseModel):
     access_token: SecretStr
     ad_account_id: str = Field(min_length=1, max_length=64, pattern=r"^(?:act_)?\d+$")
     api_version: str = Field(pattern=r"^v\d{1,3}\.\d{1,2}$")
+    currency: str = "USD"
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, value: str) -> str:
+        return normalize_currency_code(value)
 
     @field_validator("access_token")
     @classmethod
@@ -177,6 +192,12 @@ class GoogleAdsConnectionRequest(BaseModel):
     client_id: str | None = Field(default=None, min_length=1, max_length=500)
     client_secret: SecretStr | None = None
     refresh_token: SecretStr | None = None
+    currency: str = "USD"
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, value: str) -> str:
+        return normalize_currency_code(value)
 
     @field_validator("developer_token", "access_token", "client_secret", "refresh_token")
     @classmethod

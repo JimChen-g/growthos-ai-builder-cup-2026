@@ -158,3 +158,27 @@ Hosting again because `pinTag` otherwise continues to use the previous API revis
   confirmed successful Google sign-in and entry to Connections in their normal browser. This is
   user-reported login acceptance, not an agent-run two-account isolation or real-provider read test.
   The frontend bounds popup waiting and retains visible retry guidance instead of an endless spinner.
+
+### Logged-in Live acceptance corrections, 2026-10-18
+
+- Today and Connections were inspected in an authenticated empty workspace. Growth now checks
+  saved configuration before enabling an explicit read, lists each missing business provider and
+  links to Connections. Configuration alone is not described as a successful provider test.
+- Connection mutations await the status refresh. A failed refresh has a separate retry that does
+  not replay the credential save or disconnect. Credentials are not echoed in error messages.
+- Private authentication failures invalidate the visible Live session after one bounded token
+  refresh; reauthentication guidance replaces stale private content. Old-identity responses cannot
+  clear a newly signed-in user's session.
+- All three business connections save a reporting currency. Google/Meta verify it against account
+  metadata before returning monetary metrics. Their currencies must match for spend-weighted
+  scoring: no automatic FX conversion is performed. Stripe is independently labelled and filters
+  to the selected supported currency, with correct zero-decimal charge/price units. MRR is labelled
+  monthly recurring revenue, not total monthly revenue.
+- Incomplete configuration and mixed Ads currencies are rejected before quota consumption. A
+  successful report survives audit persistence failure and explicitly reports `audit_recorded:
+  false`; its audit write has a three-second bound within the overall request deadline. History
+  refresh failures remain separate from business-data read failures.
+- Regression tests exercise the real provider parsers and aggregation with deterministic HTTP
+  fixtures, plus tenant isolation, provider rejection, quotas and storage outages. These tests do
+  not establish real-provider account acceptance. Judges must enter their own valid read-only
+  credentials, test the sources, and load Growth; no operator credentials are migrated.

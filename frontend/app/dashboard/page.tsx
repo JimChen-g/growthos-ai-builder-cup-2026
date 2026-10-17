@@ -8,10 +8,12 @@ import { useDataMode } from "../../components/DataModeContext";
 import { PageState } from "../../components/PageState";
 import {
   asNumber,
+  ApiError,
   getJson,
   requestJson,
   type AgentActionLedger,
   type AuditIntegrityStatus,
+  type ConnectionCenter,
   type GrowthDashboard,
   type LiveGrowthIntelligence,
 } from "../../lib/api";
@@ -34,6 +36,7 @@ export default function GrowthPage() {
     });
 
   useEffect(() => {
+    if (mode === "live") return;
     setLedger(null);
     setIntegrity(null);
     setFailed(false);
@@ -43,9 +46,9 @@ export default function GrowthPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, capabilities.public_demo_only]);
 
+  if (mode === "live") return <LiveGrowth />;
   if (failed) return <PageState error />;
-  if (((!capabilities.public_demo_only || mode === "live") && (!ledger || !integrity)) || (mode === "demo" && !dashboard)) return <PageState />;
-  if (mode === "live") return <LiveGrowth ledger={ledger!} integrity={integrity!} onRecorded={loadRecord} />;
+  if ((!capabilities.public_demo_only && (!ledger || !integrity)) || !dashboard) return <PageState />;
   return <DemoGrowth dashboard={dashboard!} ledger={ledger} integrity={integrity} />;
 }
 
@@ -110,46 +113,115 @@ function DemoGrowth({
   );
 }
 
-function LiveGrowth({
-  ledger,
-  integrity,
-  onRecorded,
-}: {
-  ledger: AgentActionLedger;
-  integrity: AuditIntegrityStatus;
-  onRecorded: () => Promise<void>;
-}) {
-  const { t, tx, locale } = useI18n();
+const BUSINESS_SOURCES = [
+  { id: "stripe", name: "Stripe" }, { id: "google_ads", name: "Google Ads" }, { id: "meta_ads", name: "Meta Ads" },
+];
+
+function liveError(caught: unknown): MessageKey {
+  if (caught instanceof ApiError) {
+    if ([401, 403].includes(caught.status)) return "live.authRequired";
+    if (caught.message.includes("requires matching Google Ads and Meta Ads currencies")) return "growth.live.currencyMismatch";
+    if (caught.message.includes("account currency does not match")) return "connections.currencyMismatch";
+    if (caught.status === 404) return "live.serviceUnavailable";
+    if (caught.status === 409) return "growth.live.configurationIssue";
+    if (caught.status === 429) return "live.quota";
+  }
+  return "live.requestError";
+}
+
+function LiveGrowth() {
+  const { t, locale } = useI18n();
   const [report, setReport] = useState<LiveGrowthIntelligence | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<MessageKey | null>(null);
+  const [center, setCenter] = useState<ConnectionCenter | null>(null);
+  const [readinessLoading, setReadinessLoading] = useState(true);
+  const [readinessError, setReadinessError] = useState<MessageKey | null>(null);
+  const [ledger, setLedger] = useState<AgentActionLedger | null>(null);
+  const [integrity, setIntegrity] = useState<AuditIntegrityStatus | null>(null);
+  const [auditError, setAuditError] = useState(false);
+  const [auditBusy, setAuditBusy] = useState(false);
+
+  async function refreshReadiness(signal?: AbortSignal) {
+    setReadinessLoading(true);
+    setReadinessError(null);
+    try {
+      const next = await requestJson<ConnectionCenter>("/api/v1/connections", { signal });
+      if (!signal?.aborted) setCenter(next);
+    } catch (caught) {
+      if (!signal?.aborted) { setCenter(null); setReadinessError(liveError(caught)); }
+    } finally {
+      if (!signal?.aborted) setReadinessLoading(false);
+    }
+  }
+
+  async function refreshAudit(signal?: AbortSignal) {
+    setAuditBusy(true);
+    setAuditError(false);
+    try {
+      const [nextLedger, nextIntegrity] = await Promise.all([
+        requestJson<AgentActionLedger>("/api/v1/audit-log?mode=live&limit=50", { signal }),
+        requestJson<AuditIntegrityStatus>("/api/v1/audit-proof/status?mode=live", { signal }),
+      ]);
+      if (!signal?.aborted) { setLedger(nextLedger); setIntegrity(nextIntegrity); }
+    } catch {
+      if (!signal?.aborted) setAuditError(true);
+    } finally {
+      if (!signal?.aborted) setAuditBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void refreshReadiness(controller.signal);
+    void refreshAudit(controller.signal);
+    return () => controller.abort();
+  }, []);
+
+  const missing = BUSINESS_SOURCES.filter((source) => !center?.connections.some((item) => item.provider === source.id && item.configured));
+  const googleCurrency = center?.connections.find((item) => item.provider === "google_ads")?.currency;
+  const metaCurrency = center?.connections.find((item) => item.provider === "meta_ads")?.currency;
+  const adsCurrencyMismatch = Boolean(googleCurrency && metaCurrency && googleCurrency !== metaCurrency);
+  const ready = Boolean(center) && !readinessLoading && !readinessError && missing.length === 0 && !adsCurrencyMismatch;
 
   async function load() {
+    if (!ready || busy) return;
     setBusy(true);
-    setError("");
+    setError(null);
     try {
       setReport(await requestJson<LiveGrowthIntelligence>("/api/v1/growth-intelligence/live", { method: "POST" }));
-      await onRecorded();
+      // The report is valid even if the independent history refresh is unavailable.
+      void refreshAudit();
     } catch (caught) {
-      const detail = caught instanceof Error ? caught.message : "";
-      setError(detail.includes("missing configuration") ? t("growth.live.missing") : t("live.requestError"));
+      setError(liveError(caught));
+      if (caught instanceof ApiError && caught.status === 409) void refreshReadiness();
     } finally {
       setBusy(false);
     }
   }
 
   const money = (value: number | string, currency: string) =>
-    new Intl.NumberFormat(locale, { style: "currency", currency: currency.toUpperCase(), maximumFractionDigits: 0 }).format(asNumber(value));
+    new Intl.NumberFormat(locale, { style: "currency", currency: currency.toUpperCase(), currencyDisplay: "code", maximumFractionDigits: 0 }).format(asNumber(value));
 
   return (
     <main className="page">
       <h1>{t("growth.title")}</h1>
       <p className="lead">{t("growth.live.subtitle")}</p>
+      <section className="section" aria-label={t("connections.business")}>
+        <p>{readinessLoading ? t("common.loading") : center ? t("home.live.progress", { n: 3 - missing.length }) : t(readinessError ?? "live.requestError")}</p>
+        {center && missing.length > 0 && <p className="note warn">{t("growth.live.missingSources", { sources: missing.map((item) => item.name).join(" · ") })}</p>}
+        {adsCurrencyMismatch && <p className="note warn">{t("growth.live.currencyMismatch")}</p>}
+        <p className="note">{t("growth.live.configurationOnly")}</p>
+        <div className="actions-row">
+          <Link className="link" href="/connections">{t("common.manage")}</Link>
+          <button className="link" disabled={readinessLoading || busy} type="button" onClick={() => { void refreshReadiness(); }}>{t("growth.live.refreshSetup")}</button>
+        </div>
+      </section>
       <div className="actions-row">
-        <button className="button" disabled={busy} onClick={load} type="button">
+        <button className="button" disabled={busy || !ready} onClick={load} type="button">
           {busy ? t("growth.live.loading") : report ? t("growth.live.refresh") : t("growth.live.load")}
         </button>
-        {error && <span className="note warn">{error}</span>}
+        {error && <span className="note warn" role="alert">{t(error)}</span>}
       </div>
 
       {report ? (
@@ -177,17 +249,24 @@ function LiveGrowth({
             </div>
           </dl>
           <p className="note">
+            {error && <>{t("growth.live.previousReport")} </>}
             {t("growth.live.assumed")} ·{" "}
             {t("growth.live.updated", {
               time: new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(new Date(report.generated_at)),
             })}
           </p>
+          <p className="note">{t("growth.live.currencyNote")}</p>
+          {report.audit_recorded === false && <p className="note warn" role="status">{t("growth.live.auditNotSaved")}</p>}
         </>
       ) : (
         !error && <p className="muted quiet-block">{t("growth.live.empty")}</p>
       )}
 
-      <ActionLedger ledger={ledger} integrity={integrity} />
+      {auditError && <div className="section" role="status">
+        <p className="note warn">{t("growth.live.auditUnavailable")}</p>
+        <button className="link" disabled={auditBusy} type="button" onClick={() => { void refreshAudit(); }}>{t("growth.live.retryAudit")}</button>
+      </div>}
+      {ledger && integrity && <ActionLedger ledger={ledger} integrity={integrity} />}
     </main>
   );
 }
