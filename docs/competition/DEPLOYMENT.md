@@ -151,8 +151,10 @@ Hosting again because `pinTag` otherwise continues to use the previous API revis
 - Anonymous public UI can select Live and navigate Today, Growth and Connections; each presents
   the localized sign-in gate rather than a generic error or Sample data. Unauthenticated direct
   Connections requests return 401 with `Cache-Control: private, no-store`.
-- Backend validation: 211 tests passed. Real provider credentials were not migrated or retested.
-- The in-app browser did not display the Google popup during acceptance. Login completion and
-  logged-in Live page acceptance therefore still need a normal-browser user check; this release
-  does not claim a completed Google sign-in or deployed two-account isolation test. The frontend
-  additionally bounds popup waiting and retains visible retry guidance instead of an endless spinner.
+- Backend validation: 211 tests passed. Frontend validation: 21 tests, typecheck and production
+  build passed. Frontend source `22a835f` was built and published successfully after the backend.
+  Real provider credentials were not migrated or retested.
+- The in-app browser did not display the Google popup during acceptance. The owner then explicitly
+  confirmed successful Google sign-in and entry to Connections in their normal browser. This is
+  user-reported login acceptance, not an agent-run two-account isolation or real-provider read test.
+  The frontend bounds popup waiting and retains visible retry guidance instead of an endless spinner.
