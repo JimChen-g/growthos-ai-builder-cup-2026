@@ -1,0 +1,17 @@
+.gcloudignore
+.git
+.gitignore
+#!include:.gitignore
+.env
+.env.*
+.venv
+data/private
+frontend/node_modules
+frontend/.next
+frontend/out
+frontend/.env*
+blockchain/node_modules
+outputs
+work
+.firebase
+*.log

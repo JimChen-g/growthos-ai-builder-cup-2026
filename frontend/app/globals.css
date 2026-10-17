@@ -77,6 +77,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .control { display: grid; gap: 8px; }
 .control > span { color: var(--muted); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; }
 .control > small { color: var(--muted); font-size: 0.72rem; }
+.account-email { overflow-wrap: anywhere; }
 
 .segmented { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); }
 .segmented button {

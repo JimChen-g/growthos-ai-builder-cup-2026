@@ -4,8 +4,9 @@ import asyncio
 import json
 import os
 from collections import defaultdict
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 from pydantic import SecretStr
@@ -23,6 +24,17 @@ class CredentialVaultError(RuntimeError):
 
 class QuotaExceededError(RuntimeError):
     """A tenant exhausted its daily allowance for one provider."""
+
+
+class CredentialVault(Protocol):
+    @property
+    def enabled(self) -> bool: ...
+
+    async def get(self, tenant_id: str, provider: ConnectorProvider) -> SecretStr | None: ...
+
+    async def put(self, tenant_id: str, provider: ConnectorProvider, secret: SecretStr) -> None: ...
+
+    async def delete(self, tenant_id: str, provider: ConnectorProvider) -> None: ...
 
 
 class EncryptedCredentialVault:
@@ -58,6 +70,14 @@ class EncryptedCredentialVault:
         async with self._lock:
             contents = self._read()
             contents.setdefault(tenant_id, {})[provider.value] = secret.get_secret_value()
+            self._write(contents)
+
+    async def delete(self, tenant_id: str, provider: ConnectorProvider) -> None:
+        if not self._fernet:
+            raise VaultUnavailableError("encrypted credential storage is disabled")
+        async with self._lock:
+            contents = self._read()
+            contents.get(tenant_id, {}).pop(provider.value, None)
             self._write(contents)
 
     def _read(self) -> dict[str, dict[str, str]]:
@@ -116,3 +136,140 @@ class TenantQuotaLimiter:
         key = (tenant_id, provider, datetime.now(UTC).date())
         async with self._lock:
             return self._usage[key]
+
+
+class FirestoreCredentialVault:
+    """Encrypted tenant records shared across hosted instances; no local secret files."""
+
+    def __init__(
+        self,
+        project_id: str,
+        database: str,
+        key: SecretStr | None,
+        retention_days: int = 7,
+        *,
+        client=None,
+    ) -> None:
+        from google.cloud import firestore
+
+        self._client = client or firestore.Client(project=project_id, database=database)
+        self._fernet = Fernet(key.get_secret_value().encode()) if key else None
+        self._retention_days = retention_days
+
+    @property
+    def enabled(self) -> bool:
+        return self._fernet is not None
+
+    def _ref(self, tenant_id: str, provider: ConnectorProvider):
+        return (
+            self._client.collection("live_workspaces")
+            .document(tenant_id)
+            .collection("connections")
+            .document(provider.value)
+        )
+
+    async def get(self, tenant_id: str, provider: ConnectorProvider) -> SecretStr | None:
+        if not self._fernet:
+            return None
+        snapshot = await asyncio.to_thread(self._ref(tenant_id, provider).get)
+        if not snapshot.exists:
+            return None
+        data = snapshot.to_dict()
+        if data.get("expires_at") and data["expires_at"] <= datetime.now(UTC):
+            return None
+        try:
+            payload = json.loads(self._fernet.decrypt(data["ciphertext"].encode()))
+            if payload["tenant_id"] != tenant_id or payload["provider"] != provider.value:
+                raise ValueError("credential context mismatch")
+            secret = payload["secret"]
+            if not isinstance(secret, str) or not secret:
+                raise ValueError("invalid credential")
+            return SecretStr(secret)
+        except (KeyError, TypeError, ValueError, InvalidToken) as error:
+            raise CredentialVaultError(
+                "stored connector credential could not be decrypted"
+            ) from error
+
+    async def put(self, tenant_id: str, provider: ConnectorProvider, secret: SecretStr) -> None:
+        if not self._fernet:
+            raise VaultUnavailableError("encrypted credential storage is disabled")
+        payload = json.dumps(
+            {
+                "tenant_id": tenant_id,
+                "provider": provider.value,
+                "secret": secret.get_secret_value(),
+            },
+            separators=(",", ":"),
+        )
+        await asyncio.to_thread(
+            self._ref(tenant_id, provider).set,
+            {
+                "ciphertext": self._fernet.encrypt(payload.encode()).decode(),
+                "updated_at": datetime.now(UTC),
+                "expires_at": datetime.now(UTC) + timedelta(days=self._retention_days),
+            },
+        )
+
+    async def delete(self, tenant_id: str, provider: ConnectorProvider) -> None:
+        await asyncio.to_thread(self._ref(tenant_id, provider).delete)
+
+
+class FirestoreTenantQuotaLimiter:
+    """Transactional UTC-day quota shared by every service instance."""
+
+    def __init__(self, project_id: str, database: str, daily_limit: int, *, client=None) -> None:
+        from google.cloud import firestore
+
+        self._client = client or firestore.Client(project=project_id, database=database)
+        self._transactional = firestore.transactional
+        self.daily_limit = daily_limit
+
+    def _ref(self, tenant_id: str, provider: ConnectorProvider, day: date):
+        return (
+            self._client.collection("live_workspaces")
+            .document(tenant_id)
+            .collection("provider_quota")
+            .document(f"{provider.value}-{day.isoformat()}")
+        )
+
+    async def consume(
+        self,
+        tenant_id: str,
+        provider: ConnectorProvider,
+        *,
+        amount: int = 1,
+        at: datetime | None = None,
+    ) -> None:
+        if amount < 1:
+            raise ValueError("quota amount must be positive")
+        now = at or datetime.now(UTC)
+        ref = self._ref(tenant_id, provider, now.date())
+
+        def reserve() -> None:
+            transaction = self._client.transaction()
+
+            @self._transactional
+            def apply(transaction):
+                snapshot = ref.get(transaction=transaction)
+                count = (snapshot.to_dict() or {}).get("count", 0)
+                if count + amount > self.daily_limit:
+                    raise QuotaExceededError(
+                        "Daily provider usage limit reached. Try again tomorrow."
+                    )
+                transaction.set(
+                    ref,
+                    {
+                        "count": count + amount,
+                        "expires_at": now + timedelta(days=2),
+                    },
+                )
+
+            apply(transaction)
+
+        await asyncio.to_thread(reserve)
+
+    async def used(self, tenant_id: str, provider: ConnectorProvider) -> int:
+        snapshot = await asyncio.to_thread(
+            self._ref(tenant_id, provider, datetime.now(UTC).date()).get
+        )
+        return (snapshot.to_dict() or {}).get("count", 0)

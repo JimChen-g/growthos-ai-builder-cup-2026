@@ -73,10 +73,30 @@ test("restored anonymous identity is reused before a new sign-in can start", asy
   assert.equal(await getToken(), "restored-token");
 });
 
-function loadApi(fetchResponse) {
+test("Live credentials reject anonymous or missing users without creating an anonymous session", async () => {
+  for (const user of [null, { uid: "anonymous", isAnonymous: true }]) {
+    const auth = { currentUser: user, authStateReady: async () => {} };
+    const getToken = loadAuth(auth, () => assert.fail("Live must not create an anonymous identity"));
+    await assert.rejects(getToken(false, true), /registered-user-required/);
+  }
+});
+
+test("Live token comes from the formal user and is discarded if identity changes mid-refresh", async () => {
+  const auth = { authStateReady: async () => {}, currentUser: null };
+  const user = { uid: "alice", isAnonymous: false, getIdToken: async () => "alice-token" };
+  auth.currentUser = user;
+  const getToken = loadAuth(auth, () => assert.fail("formal identity already exists"));
+  assert.equal(await getToken(false, true), "alice-token");
+  user.getIdToken = async () => { auth.currentUser = { uid: "bob" }; return "alice-token"; };
+  await assert.rejects(getToken(true, true), /identity-changing/);
+});
+
+function loadApi(fetchResponse, options = {}) {
   const exports = {};
   const tokenRequests = [];
+  const registeredRequests = [];
   const requests = [];
+  let identity = "alice:1";
   const source = ts.transpileModule(fs.readFileSync(path.join(frontend, "lib/api.ts"), "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
@@ -85,17 +105,19 @@ function loadApi(fetchResponse) {
     process: { env: {} },
     require(name) {
       assert.equal(name, "./firebase");
-      return { getFirebaseIdToken: async (force = false) => {
+      return { firebaseIdentityKey: () => identity, getFirebaseIdToken: async (force = false, registered = false) => {
         tokenRequests.push(force);
+        registeredRequests.push(registered);
+        if (options.token) return options.token({ force, registered, setIdentity: (next) => { identity = next; } });
         return force ? "fresh-token" : "old-token";
       } };
     },
     fetch: async (url, init) => {
       requests.push({ url, ...init });
-      return fetchResponse(requests.length);
+      return fetchResponse(requests.length, (next) => { identity = next; });
     },
   });
-  return { ...exports, requests, tokenRequests };
+  return { ...exports, requests, tokenRequests, registeredRequests };
 }
 
 test("API retries a rejected identity once with a forced fresh token and the original body", async () => {
@@ -111,6 +133,33 @@ test("API retries a rejected identity once with a forced fresh token and the ori
   assert.equal(api.requests[1].headers.Authorization, "Bearer fresh-token");
   assert.equal(api.requests[1].body, body);
   assert.equal(api.requests[1].method, "POST");
+});
+
+test("anonymous and unverified /me responses accept a null workspace as a normal signed-out state", () => {
+  const { isWorkspaceSession } = loadApi(() => assert.fail("validation must not fetch"));
+  assert.equal(isWorkspaceSession({ uid: "anonymous-user", workspace_id: null, authenticated: false, live_allowed: false }), true);
+  assert.equal(isWorkspaceSession({ uid: "unverified-user", workspace_id: null, authenticated: false, live_allowed: false }), true);
+  assert.equal(isWorkspaceSession({ uid: "registered-user", workspace_id: null, authenticated: true, live_allowed: false }), true);
+});
+
+test("Live /me responses require a nonempty workspace and authenticated session", () => {
+  const { isWorkspaceSession } = loadApi(() => assert.fail("validation must not fetch"));
+  for (const uid of [null, "verified-user"]) {
+    assert.equal(isWorkspaceSession({ uid, workspace_id: "local-demo", authenticated: true, live_allowed: true }), true);
+  }
+  for (const workspace_id of [null, "", " ", undefined, 123]) {
+    assert.equal(isWorkspaceSession({ uid: "verified-user", workspace_id, authenticated: true, live_allowed: true }), false);
+  }
+  assert.equal(isWorkspaceSession({ uid: "anonymous-user", workspace_id: "someone-else", authenticated: false, live_allowed: true }), false);
+});
+
+test("malformed /me responses remain fail-closed", () => {
+  const { isWorkspaceSession } = loadApi(() => assert.fail("validation must not fetch"));
+  for (const value of [null, {}, { uid: null, workspace_id: null, authenticated: "false", live_allowed: false },
+    { uid: null, workspace_id: null, authenticated: false },
+    { uid: "", workspace_id: null, authenticated: false, live_allowed: false }]) {
+    assert.equal(isWorkspaceSession(value), false);
+  }
 });
 
 test("API does not loop when the refreshed identity is also rejected", async () => {
@@ -148,6 +197,53 @@ test("API validation arrays become readable messages rather than object strings"
     return true;
   });
   assert.equal(api.requests.length, 1);
+});
+
+test("all credential and Live reads require a registered user; Sample and /me remain anonymous-capable", async () => {
+  const api = loadApi(() => Response.json({ ok: true }));
+  for (const [pathname, body] of [
+    ["/api/v1/connections", undefined],
+    ["/api/v1/connections/stripe/credential", JSON.stringify({ secret: "test-only" })],
+    ["/api/v1/growth-intelligence/live", undefined],
+    ["/api/v1/audit-log?mode=live&limit=50", undefined],
+    ["/api/v1/visibility/scan", JSON.stringify({ mode: "live" })],
+    ["/api/v1/me", undefined],
+    ["/api/v1/competition/analyze", JSON.stringify({ language: "en" })],
+    ["/api/v1/dashboard?mode=demo", undefined],
+  ]) await api.requestJson(pathname, { body });
+  assert.deepEqual(api.registeredRequests, [true, true, true, true, true, false, false, false]);
+});
+
+test("identity changes prevent old credentials from being sent with a new user's token", async () => {
+  const api = loadApi(() => assert.fail("no request may be sent"), {
+    token: ({ setIdentity }) => { setIdentity("bob:2"); return "bob-token"; },
+  });
+  await assert.rejects(api.requestJson("/api/v1/connections/stripe/credential", {
+    method: "PUT", body: JSON.stringify({ secret: "alice-key" }),
+  }), /identity-changing/);
+  assert.equal(api.requests.length, 0);
+});
+
+test("identity changes discard old responses and prevent replaying a mutation", async () => {
+  for (const status of [200, 401]) {
+    const api = loadApi((_attempt, setIdentity) => {
+      setIdentity("bob:2");
+      return Response.json({ secret_data: "alice-data" }, { status });
+    });
+    await assert.rejects(api.requestJson("/api/v1/connections/stripe/credential", {
+      method: "PUT", body: JSON.stringify({ secret: "alice-key" }),
+    }), /identity-changing/);
+    assert.equal(api.requests.length, 1);
+    assert.deepEqual(api.tokenRequests, [false]);
+  }
+});
+
+test("identity changes during JSON decoding cannot display another user's data", async () => {
+  const api = loadApi((_attempt, setIdentity) => ({
+    status: 200, ok: true,
+    json: async () => { setIdentity("bob:2"); return { account: "alice" }; },
+  }));
+  await assert.rejects(api.requestJson("/api/v1/connections"), /identity-changing/);
 });
 
 function loadWorker(fetchResponse) {

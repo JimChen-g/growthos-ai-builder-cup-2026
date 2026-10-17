@@ -31,6 +31,7 @@ async def test_workspace_policy_is_public_without_exposing_server_secrets(
         assert response.json() == {
             "public_demo_only": public_demo_only,
             "live_available": not public_demo_only,
+            "live_self_service_enabled": False,
         }
         assert response.headers["Cache-Control"] == "no-store"
 

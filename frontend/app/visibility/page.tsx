@@ -70,7 +70,7 @@ export default function VisibilityPage() {
           <p>{tx(plan.rationale)}</p>
         </section>
       )}
-      <p className="muted">{t(capabilities.public_demo_only ? "visibility.publicHint" : "visibility.demoHint")}</p>
+      <p className="muted">{t(capabilities.public_demo_only && !capabilities.live_self_service_enabled ? "visibility.publicHint" : "visibility.demoHint")}</p>
     </main>
   );
 }
@@ -121,8 +121,8 @@ function LiveVisibility() {
       });
       setReport(result);
       await refreshHistory();
-    } catch (caught) {
-      setError(caught instanceof Error ? tx(caught.message) : t("common.error"));
+    } catch {
+      setError(t("live.requestError"));
     } finally {
       setBusy(false);
     }
@@ -199,7 +199,7 @@ function LiveVisibility() {
                 <li key={`${result.provider}-${index}`}>
                   <strong>{result.prompt}</strong>
                   <small>{providerNames[result.provider]}</small>
-                  <p>{result.error ? tx(result.error) : result.answer}</p>
+                  <p>{result.error ? t("live.sourceError") : result.answer}</p>
                   {result.citations.length > 0 && (
                     <ul className="plain" aria-label={t("visibility.citations")}>
                       {result.citations.map((citation) => (

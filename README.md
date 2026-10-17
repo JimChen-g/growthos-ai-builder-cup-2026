@@ -298,10 +298,25 @@ python3 -m venv .venv
 |---|---|
 | `API_ACCESS_TOKEN` | Every `/api` request must send `Authorization: Bearer <token>`. Without it the API answers only direct loopback clients; proxied or remote requests get `401`. |
 | `API_PRINCIPAL_NAME` | Name recorded as the approver for token-authenticated decisions (default `founder`). |
-| `PUBLIC_DEMO_ONLY` | `true` refuses Connections, Live refresh and every `mode=live` request, for hosted demos. |
+| `PUBLIC_DEMO_ONLY` | `true` closes shared legacy workflows and defaults to Sample-only. The independent self-service flag can permit isolated Live without opening shared writes. |
+| `LIVE_SELF_SERVICE_ENABLED` | Opt-in verified Google/email identities may configure and read only their own business accounts. Anonymous users remain Sample-only. |
+| `LIVE_STORAGE_BACKEND` | Hosted self-service requires `firestore`; local development may use `local`. |
+| `LIVE_DATA_RETENTION_DAYS` | Private credentials/history expire after 7 days by default; configure Firestore TTL for physical deletion. |
 | `CORS_ALLOW_ORIGINS` | Comma-separated frontend origins. |
 | `FIREBASE_AUTH_REQUIRED` | `true` requires a valid Firebase ID token for API requests. Use this with `FIREBASE_PROJECT_ID` in the hosted competition environment. |
-| `NEXT_PUBLIC_FIREBASE_*` | Public Firebase web-app identifiers used for anonymous sign-in. They are not backend credentials; authorization remains enforced by ID-token verification and Firestore rules. |
+| `NEXT_PUBLIC_FIREBASE_*` | Public Firebase identifiers for anonymous Sample and Google Live sign-in, not backend credentials. Server-side verified identity owns private records; Firestore denies browser access. |
+
+Hosted Live restores the tested Stripe, Google Ads, Meta Ads, Perplexity/Reddit and X read
+adapters with user-owned credentials. Google Ads accepts existing OAuth credentials; this does
+not claim a new one-click Ads consent flow. Connecting one provider can be tested independently;
+the existing aggregate Growth report still requires all three business sources. Visibility and
+customer feedback operate independently. Growth Score market/execution inputs are disclosed
+defaults, not externally measured facts. No real campaign write runtime is enabled.
+
+Use a restricted Stripe key, your own Ads configuration and your own AI/social keys. Neither
+operator environment credentials nor Vertex service-account ADC are shared with hosted users.
+Disconnect removes this app's saved credential; revoke the original token separately at its
+provider if required. Never paste credentials into chat, commit them, or publish them in a build.
 
 Run the Phase 2 offline acceptance flow:
 

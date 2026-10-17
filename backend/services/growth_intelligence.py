@@ -111,7 +111,9 @@ class GrowthIntelligenceReport(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     data_source_mode: DataSourceMode
-    company: CompanyProfile
+    # Hosted self-service has no company-profile onboarding yet; never return the server's
+    # example company as if it belonged to the signed-in account.
+    company: CompanyProfile | None
     revenue: RevenueSnapshot
     google_ads: AdsSnapshot
     meta_ads: AdsSnapshot

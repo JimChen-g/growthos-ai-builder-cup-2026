@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     api_principal_name: str = "founder"
     # Hosted judge/demo deployments: serve the Demo workspace only, refuse Live routes.
     public_demo_only: bool = False
+    # Opt-in private, read-only workspaces for formally signed-in public visitors.
+    # This does not enable the legacy shared workflows or advertising writes.
+    live_self_service_enabled: bool = False
+    live_storage_backend: Literal["local", "firestore"] = "local"
+    live_data_retention_days: int = Field(default=7, ge=1, le=30)
+    live_request_timeout_seconds: float = Field(default=45.0, gt=0, le=50)
     # Competition deployments use Firebase anonymous authentication. The backend derives the
     # workspace from the verified Firebase uid and never trusts a client-supplied tenant header.
     firebase_project_id: str | None = None

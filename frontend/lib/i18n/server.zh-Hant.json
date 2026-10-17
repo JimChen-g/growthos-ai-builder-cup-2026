@@ -1,5 +1,14 @@
 {
   "exact": {
+    "Paste your own Vertex AI API key": "貼上你自己的 Vertex AI API 金鑰",
+    "Workspace-owned OAuth or access token + developer token": "目前工作區的 OAuth 憑證或存取權杖 + 開發者權杖",
+    "Connect a restricted Stripe key": "連結 Stripe 受限金鑰",
+    "Connect your Google Ads account": "連結你自己的 Google Ads 帳戶",
+    "Save the key in this workspace and test the connection": "將金鑰儲存到目前工作區，然後測試連線",
+    "Save your credentials and customer ID in this workspace": "將你的憑證和客戶 ID 儲存到目前工作區",
+    "This connection reads reporting data only; no campaigns or budgets are changed.": "此連線僅讀取報表資料，不會修改廣告活動或預算。",
+    "Use a restricted Stripe key with read-only access.": "請使用具有唯讀權限的 Stripe 受限金鑰。",
+    "Your own Vertex AI API key is required for Live access.": "即時存取需要你自己的 Vertex AI API 金鑰。",
     "I love how quickly the automation resolves repetitive tickets.": "我很喜歡自動化處理重複工單的速度。",
     "The reporting is excellent and our support team saves hours each week.": "報表很出色，我們的客服團隊每週都能節省好幾個小時。",
     "Fast responses and easy automation make this product great for our team.": "回應快，自動化又容易上手，這款產品很適合我們的團隊。",

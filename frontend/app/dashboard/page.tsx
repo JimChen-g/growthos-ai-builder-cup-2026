@@ -37,14 +37,14 @@ export default function GrowthPage() {
     setLedger(null);
     setIntegrity(null);
     setFailed(false);
-    const requests: Array<Promise<unknown>> = capabilities.public_demo_only ? [] : [loadRecord()];
+    const requests: Array<Promise<unknown>> = capabilities.public_demo_only && mode === "demo" ? [] : [loadRecord()];
     if (mode === "demo") requests.push(getJson<GrowthDashboard>("/api/v1/dashboard").then(setDashboard));
     Promise.all(requests).catch(() => setFailed(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, capabilities.public_demo_only]);
 
   if (failed) return <PageState error />;
-  if ((!capabilities.public_demo_only && (!ledger || !integrity)) || (mode === "demo" && !dashboard)) return <PageState />;
+  if (((!capabilities.public_demo_only || mode === "live") && (!ledger || !integrity)) || (mode === "demo" && !dashboard)) return <PageState />;
   if (mode === "live") return <LiveGrowth ledger={ledger!} integrity={integrity!} onRecorded={loadRecord} />;
   return <DemoGrowth dashboard={dashboard!} ledger={ledger} integrity={integrity} />;
 }
@@ -132,7 +132,7 @@ function LiveGrowth({
       await onRecorded();
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : "";
-      setError(detail.includes("missing configuration") ? t("growth.live.missing") : tx(detail) || t("common.error"));
+      setError(detail.includes("missing configuration") ? t("growth.live.missing") : t("live.requestError"));
     } finally {
       setBusy(false);
     }

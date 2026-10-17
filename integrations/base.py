@@ -29,8 +29,9 @@ class IntegrationAPIError(IntegrationError):
     ) -> None:
         self.provider = provider
         self.status_code = status_code
-        # Provider error body for server logs and debugging; never shown to the browser.
-        self.detail = detail
+        # Keep the legacy attribute/signature, but never retain provider response bodies:
+        # those can echo credentials, prompts, account IDs or private business records.
+        self.detail = f"HTTP {status_code}" if detail is not None and status_code else None
         super().__init__(f"{provider}: {message}")
 
 
@@ -43,35 +44,32 @@ async def request_json(
 ) -> Any:
     """Make one request and convert failures into provider-safe exceptions."""
 
+    response = None
+    failure_kind = None
     try:
         response = await client.request(method, url, **kwargs)
     except httpx.HTTPError as exc:
-        logger.warning("%s request to %s failed: %s", provider, response_path(url), exc)
-        raise IntegrationTransportError(f"{provider}: request failed") from exc
+        failure_kind = type(exc).__name__
+    if response is None:
+        # Do not log URLs or exceptions: both may contain query-string API keys or
+        # tenant account IDs. Raise outside the handler to avoid retaining that cause.
+        logger.warning("%s request failed (%s)", provider, failure_kind)
+        raise IntegrationTransportError(f"{provider}: request failed")
 
     if response.is_error:
-        detail = response.text[:2000]
         logger.warning(
-            "%s rejected %s %s with HTTP %s: %s",
+            "%s rejected %s with HTTP %s",
             provider,
             method,
-            response_path(url),
             response.status_code,
-            detail,
         )
         raise IntegrationAPIError(
-            provider, response.status_code, "API request was rejected", detail=detail
+            provider, response.status_code, "API request was rejected"
         )
 
     try:
         return response.json()
-    except ValueError as exc:
-        raise IntegrationAPIError(
-            provider, response.status_code, "API returned invalid JSON"
-        ) from exc
-
-
-def response_path(url: str) -> str:
-    """Log the endpoint without query strings, which may carry access tokens."""
-
-    return str(httpx.URL(url).copy_with(query=None))
+    except ValueError:
+        pass
+    # JSONDecodeError retains its input document; do not attach it to the safe error.
+    raise IntegrationAPIError(provider, response.status_code, "API returned invalid JSON")

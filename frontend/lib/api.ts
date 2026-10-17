@@ -1,4 +1,4 @@
-import { getFirebaseIdToken } from "./firebase";
+import { firebaseIdentityKey, getFirebaseIdToken } from "./firebase";
 
 // Public hosting uses same-origin /api rewrites. Local development can opt into an explicit URL.
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
@@ -6,6 +6,23 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 export type NumberValue = number | string;
 
 export type DataMode = "demo" | "live";
+
+export type WorkspaceSession = {
+  uid: string | null;
+  workspace_id: string | null;
+  authenticated: boolean;
+  live_allowed: boolean;
+};
+
+export function isWorkspaceSession(value: unknown): value is WorkspaceSession {
+  if (!value || typeof value !== "object") return false;
+  const session = value as Record<string, unknown>;
+  if ((session.uid !== null && (typeof session.uid !== "string" || !session.uid.trim())) ||
+      typeof session.authenticated !== "boolean" || typeof session.live_allowed !== "boolean") return false;
+  const hasWorkspace = typeof session.workspace_id === "string" && session.workspace_id.trim().length > 0;
+  if (session.live_allowed) return session.authenticated && hasWorkspace;
+  return session.workspace_id === null || hasWorkspace;
+}
 
 export type CompetitionEvidence = {
   evidence_id: string;
@@ -214,7 +231,7 @@ export type LiveGrowthIntelligence = {
   data_source_mode: "live";
   company: {
     company_name: string;
-  };
+  } | null;
   revenue: {
     revenue: NumberValue;
     mrr: NumberValue;
@@ -446,28 +463,46 @@ export class ApiError extends Error {
 }
 
 export async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const identityToken = await getFirebaseIdToken();
-  const send = (token: string | null) => fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init.headers,
-    },
-  });
+  const bodyMode = typeof init.body === "string" ? (() => { try { return JSON.parse(init.body).mode; } catch { return null; } })() : null;
+  const registered = path.startsWith("/api/v1/connections") || path.startsWith("/api/v1/growth-intelligence") || /[?&]mode=live(?:&|$)/.test(path) || bodyMode === "live";
+  const initialIdentity = firebaseIdentityKey();
+  const identityToken = await getFirebaseIdToken(false, registered);
+  const identity = firebaseIdentityKey();
+  const ensureIdentity = () => {
+    if ((initialIdentity && initialIdentity !== identity) || firebaseIdentityKey() !== identity) {
+      throw new ApiError("auth/identity-changing", 401);
+    }
+  };
+  const send = (token: string | null) => {
+    ensureIdentity();
+    return fetch(`${API_BASE}${path}`, {
+      ...init,
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+        ...init.headers,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  };
   let response = await send(identityToken);
   // A server-rejected identity never reaches the action handler, so a single
   // refreshed-token retry is safe even for approval requests.
-  if (response.status === 401 && identityToken) response = await send(await getFirebaseIdToken(true));
+  ensureIdentity();
+  if (response.status === 401 && identityToken) response = await send(await getFirebaseIdToken(true, registered));
+  ensureIdentity();
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+    ensureIdentity();
     const detail = payload?.detail;
     const message = typeof detail === "string" ? detail : Array.isArray(detail)
       ? detail.map((item) => typeof item?.msg === "string" ? item.msg : "Invalid input").join("; ")
       : `Request failed with ${response.status}`;
     throw new ApiError(message, response.status);
   }
-  return (await response.json()) as T;
+  const payload = (await response.json()) as T;
+  ensureIdentity();
+  return payload;
 }
 
 export function asNumber(value: NumberValue): number {

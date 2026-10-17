@@ -114,8 +114,8 @@ function LiveCustomers() {
       });
       setCollection(result);
       await refreshHistory();
-    } catch (caught) {
-      setError(caught instanceof Error ? tx(caught.message) : t("common.error"));
+    } catch {
+      setError(t("live.requestError"));
     } finally {
       setBusy(false);
     }
@@ -154,7 +154,7 @@ function LiveCustomers() {
                 <div className="row-main">
                   <strong>{source.provider === "x" ? "X" : "Reddit"}</strong>
                   <small>{tx(source.collection_method)} · {t("customers.signals", { n: source.signal_count })}</small>
-                  {source.error && <p>{tx(source.error)}</p>}
+                  {source.error && <p>{t("live.sourceError")}</p>}
                 </div>
               </li>
             ))}

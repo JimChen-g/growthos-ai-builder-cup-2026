@@ -1,6 +1,7 @@
 """FastAPI application through the Phase 5 fixed competition demo."""
 
 import logging
+from asyncio import timeout
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -8,13 +9,17 @@ from fastapi import FastAPI, Header, HTTPException, Path, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 
 from agents.orchestrator import WorkflowRun
 from backend.api.security import (
+    FIREBASE_PRINCIPAL,
     approver_identity,
     ensure_live_allowed,
     install_access_control,
+    live_access_allowed,
+    request_live_workspace_id,
     request_workspace_id,
 )
 from backend.config import Settings
@@ -43,6 +48,7 @@ from backend.models.connectors import (
     FeedbackCollectionResponse,
     GeoScanReport,
     GeoScanRequest,
+    GoogleAdsConnectionRequest,
     MetaAdsConnectionRequest,
     VertexAIConnectionRequest,
 )
@@ -67,7 +73,11 @@ from backend.services.competition_decision import (
     CompetitionQuotaExceededError,
     build_competition_decision_service,
 )
-from backend.services.connector_security import CredentialVaultError, VaultUnavailableError
+from backend.services.connector_security import (
+    CredentialVaultError,
+    QuotaExceededError,
+    VaultUnavailableError,
+)
 from backend.services.demo import load_demo_script
 from backend.services.founder_experience import (
     FounderExperienceService,
@@ -78,7 +88,11 @@ from backend.services.growth_intelligence import (
     GrowthSourceError,
     run_growth_intelligence,
 )
-from backend.services.intelligence_history import IntelligenceHistoryService
+from backend.services.intelligence_history import (
+    FirestoreAuditLogService,
+    FirestoreIntelligenceHistoryService,
+    IntelligenceHistoryService,
+)
 from backend.services.phase2_runtime import (
     DEMO_FOUNDER_MESSAGE,
     REPOSITORY_ROOT,
@@ -93,6 +107,26 @@ from backend.services.real_intelligence import (
 from integrations.gemini_structured import build_narration_generator
 
 logger = logging.getLogger(__name__)
+
+
+class BoundedAPIRoute(APIRoute):
+    """Cancel the actual endpoint coroutine, not just BaseHTTPMiddleware's response wait."""
+
+    def get_route_handler(self):
+        original = super().get_route_handler()
+
+        async def bounded(request: Request):
+            try:
+                async with timeout(request.app.state.settings.live_request_timeout_seconds):
+                    return await original(request)
+            except TimeoutError:
+                return JSONResponse(
+                    {"detail": "The connected source timed out. Try fewer sources and retry."},
+                    status_code=504,
+                    headers={"Cache-Control": "private, no-store", "Vary": "Authorization"},
+                )
+
+        return bounded
 
 
 class WorkflowDecisionRequest(BaseModel):
@@ -141,9 +175,7 @@ def create_app(
         if not hasattr(app.state, "demo_script"):
             app.state.demo_script = load_demo_script(Settings().phase5_demo_fixture_path)
         if not hasattr(app.state, "competition_decisions"):
-            app.state.competition_decisions = build_competition_decision_service(
-                app.state.settings
-            )
+            app.state.competition_decisions = build_competition_decision_service(app.state.settings)
         yield
 
     app = FastAPI(
@@ -152,6 +184,7 @@ def create_app(
         description="Approval-gated growth orchestration with a fixed three-minute demo",
         lifespan=lifespan,
     )
+    app.router.route_class = BoundedAPIRoute
     if runtime is not None:
         app.state.runtime = runtime
     if founder_experience is not None:
@@ -192,7 +225,7 @@ def create_app(
             if origin.strip()
         ],
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["Content-Type", "X-Tenant-ID", "Authorization"],
     )
 
@@ -216,6 +249,15 @@ def create_app(
     def active_audit_log(request: Request, mode: DataMode) -> AuditLogService:
         if mode is DataMode.DEMO:
             return active_runtime(request).audit_log
+        if getattr(request.state, "principal", None) == FIREBASE_PRINCIPAL:
+            selected_settings = request.app.state.settings
+            workspace_id = request_live_workspace_id(request)
+            return FirestoreAuditLogService(
+                selected_settings.firebase_project_id,
+                selected_settings.firestore_database,
+                workspace_id,
+                selected_settings.live_data_retention_days,
+            )
         if not hasattr(request.app.state, "live_audit_log"):
             request.app.state.live_audit_log = AuditLogService(mode=DataMode.LIVE)
         return request.app.state.live_audit_log
@@ -233,6 +275,17 @@ def create_app(
         return request.app.state.competition_decisions
 
     def active_intelligence_history(request: Request, mode: DataMode) -> IntelligenceHistoryService:
+        if (
+            mode is DataMode.LIVE
+            and getattr(request.state, "principal", None) == FIREBASE_PRINCIPAL
+        ):
+            selected_settings = request.app.state.settings
+            return FirestoreIntelligenceHistoryService(
+                selected_settings.firebase_project_id,
+                selected_settings.firestore_database,
+                request_live_workspace_id(request),
+                selected_settings.live_data_retention_days,
+            )
         state_name = f"{mode.value}_intelligence_history"
         if not hasattr(request.app.state, state_name):
             selected_settings = active_real_intelligence(request).connections.settings
@@ -261,9 +314,23 @@ def create_app(
             {
                 "public_demo_only": app_settings.public_demo_only,
                 "live_available": not app_settings.public_demo_only,
+                "live_self_service_enabled": app_settings.live_self_service_enabled,
             },
             headers={"Cache-Control": "no-store"},
         )
+
+    @app.get("/api/v1/me")
+    async def current_identity(request: Request) -> dict[str, str | bool | None]:
+        firebase_user = getattr(request.state, "principal", None) == FIREBASE_PRINCIPAL
+        allowed = live_access_allowed(request, app_settings)
+        return {
+            "uid": getattr(request.state, "firebase_uid", None),
+            "workspace_id": request_live_workspace_id(request) if allowed else None,
+            "authenticated": (
+                bool(getattr(request.state, "formal_identity", False)) if firebase_user else True
+            ),
+            "live_allowed": allowed,
+        }
 
     @app.post(
         "/api/v1/competition/analyze",
@@ -416,6 +483,9 @@ def create_app(
             ),
         ] = "local-demo",
     ) -> IntelligenceHistory:
+        tenant_id = (
+            request_live_workspace_id(request, tenant_id) if mode is DataMode.LIVE else tenant_id
+        )
         ledger = await active_audit_log(request, mode).list(limit=500)
         return await active_intelligence_history(request, mode).list_snapshots(
             tenant_id=tenant_id,
@@ -459,7 +529,11 @@ def create_app(
         receipt_path = (
             configured_path if configured_path.is_absolute() else REPOSITORY_ROOT / configured_path
         )
-        receipt = load_public_anchor_receipt(receipt_path)
+        receipt = (
+            None
+            if mode is DataMode.LIVE and app_settings.firebase_auth_required
+            else load_public_anchor_receipt(receipt_path)
+        )
         return build_audit_integrity_status(
             entries,
             mode=mode,
@@ -512,11 +586,14 @@ def create_app(
     ) -> GrowthIntelligenceReport:
         """Read Stripe, Google Ads, and Meta Ads only after an explicit Live refresh."""
 
+        tenant_id = request_live_workspace_id(request, tenant_id)
         try:
-            selected_settings = await active_real_intelligence(request).connections.growth_settings(
-                tenant_id
-            )
+            connections = active_real_intelligence(request).connections
+            selected_settings = await connections.growth_settings(tenant_id)
+            await connections.consume_growth_quota(tenant_id)
             report = await run_growth_intelligence(selected_settings)
+            if getattr(request.state, "principal", None) == FIREBASE_PRINCIPAL:
+                report = report.model_copy(update={"company": None})
             await active_audit_log(request, DataMode.LIVE).record(
                 agent="Growth Intelligence Engine",
                 action=f"Measured Growth Score {report.growth_score.score}/100",
@@ -527,19 +604,18 @@ def create_app(
                 status=AgentActionStatus.EXECUTED,
             )
             return report
+        except QuotaExceededError as error:
+            raise HTTPException(
+                status_code=429, detail="Daily provider usage limit reached."
+            ) from error
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except GrowthSourceError as error:
-            for provider, failure in error.failures:
-                logger.warning(
-                    "Live refresh: %s failed: %r (detail: %s)",
-                    provider,
-                    failure,
-                    getattr(failure, "detail", None),
-                )
+            for provider, _failure in error.failures:
+                logger.warning("Live refresh: %s read failed", provider)
             raise HTTPException(status_code=502, detail=str(error)) from error
         except Exception as error:
-            logger.exception("Live growth refresh failed unexpectedly")
+            logger.warning("Live growth refresh failed unexpectedly")
             raise HTTPException(
                 status_code=502,
                 detail=(
@@ -569,6 +645,7 @@ def create_app(
             ),
         ] = "local-demo",
     ) -> ConnectionCenter:
+        tenant_id = request_live_workspace_id(request, tenant_id)
         return await active_real_intelligence(request).connections.center(tenant_id)
 
     @app.put(
@@ -589,6 +666,7 @@ def create_app(
             ),
         ] = "local-demo",
     ) -> ConnectionStatus:
+        tenant_id = request_live_workspace_id(request, tenant_id)
         try:
             return await active_real_intelligence(request).connections.save_secret(
                 tenant_id, provider, body.secret
@@ -616,6 +694,7 @@ def create_app(
             ),
         ] = "local-demo",
     ) -> ConnectionStatus:
+        tenant_id = request_live_workspace_id(request, tenant_id)
         try:
             return await active_real_intelligence(request).connections.select_account(
                 tenant_id, provider, body.account_id
@@ -640,14 +719,64 @@ def create_app(
             ),
         ] = "local-demo",
     ) -> ConnectionStatus:
+        tenant_id = request_live_workspace_id(request, tenant_id)
         try:
             return await active_real_intelligence(request).connections.save_meta_connection(
                 tenant_id, body
             )
-        except VaultUnavailableError as error:
+        except (VaultUnavailableError, UnsupportedConnectionError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except CredentialVaultError as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
+
+    @app.put(
+        "/api/v1/connections/google_ads/config",
+        response_model=ConnectionStatus,
+    )
+    async def save_google_ads_connection(
+        request: Request,
+        body: GoogleAdsConnectionRequest,
+        tenant_id: Annotated[
+            str,
+            Header(
+                alias="X-Tenant-ID", min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$"
+            ),
+        ] = "local-demo",
+    ) -> ConnectionStatus:
+        tenant_id = request_live_workspace_id(request, tenant_id)
+        try:
+            return await active_real_intelligence(request).connections.save_google_ads_connection(
+                tenant_id, body
+            )
+        except (VaultUnavailableError, UnsupportedConnectionError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except CredentialVaultError as error:
+            raise HTTPException(
+                status_code=503, detail="Secure connection storage unavailable."
+            ) from error
+
+    @app.delete("/api/v1/connections/{provider}", response_model=ConnectionStatus)
+    async def disconnect_provider(
+        request: Request,
+        provider: Annotated[ConnectorProvider, Path()],
+        tenant_id: Annotated[
+            str,
+            Header(
+                alias="X-Tenant-ID", min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$"
+            ),
+        ] = "local-demo",
+    ) -> ConnectionStatus:
+        tenant_id = request_live_workspace_id(request, tenant_id)
+        try:
+            return await active_real_intelligence(request).connections.disconnect(
+                tenant_id, provider
+            )
+        except UnsupportedConnectionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except CredentialVaultError as error:
+            raise HTTPException(
+                status_code=503, detail="Secure connection storage unavailable."
+            ) from error
 
     @app.put(
         "/api/v1/connections/gemini_vertex/config",
@@ -666,11 +795,12 @@ def create_app(
             ),
         ] = "local-demo",
     ) -> ConnectionStatus:
+        tenant_id = request_live_workspace_id(request, tenant_id)
         try:
             return await active_real_intelligence(request).connections.save_vertex_connection(
                 tenant_id, body
             )
-        except VaultUnavailableError as error:
+        except (VaultUnavailableError, UnsupportedConnectionError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except CredentialVaultError as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
@@ -692,6 +822,7 @@ def create_app(
             ),
         ] = "local-demo",
     ) -> ConnectionTestResult:
+        tenant_id = request_live_workspace_id(request, tenant_id)
         selected = active_real_intelligence(request)
         if provider in {
             ConnectorProvider.OPENAI,
@@ -704,6 +835,8 @@ def create_app(
             return await selected.feedback.connection_test(tenant_id, provider)
         if provider is ConnectorProvider.META_ADS:
             return await selected.connections.meta_connection_test(tenant_id)
+        if provider in {ConnectorProvider.STRIPE, ConnectorProvider.GOOGLE_ADS}:
+            return await selected.connections.business_connection_test(tenant_id, provider)
         center = await selected.connections.center(tenant_id)
         item = next(entry for entry in center.connections if entry.provider is provider)
         return ConnectionTestResult(
@@ -733,21 +866,32 @@ def create_app(
         ] = "local-demo",
     ) -> GeoScanReport:
         if body.mode is DataMode.LIVE:
-            ensure_live_allowed(request.app.state.settings)
+            ensure_live_allowed(request.app.state.settings, request)
+            tenant_id = request_live_workspace_id(request, tenant_id)
+        elif app_settings.firebase_auth_required:
+            # Hosted visitors already have the public static Sample path; do not persist
+            # sample scans in a shared local file or let it inherit another tenant's identity.
+            raise HTTPException(status_code=403, detail="Use the Sample workspace demo views.")
         report = await active_real_intelligence(request).geo.scan(tenant_id, body)
         related_action_ids: list[str] = []
         if body.mode is DataMode.LIVE:
+            measured = any(item.successful_prompts > 0 for item in report.providers)
             entry = await active_audit_log(request, DataMode.LIVE).record(
                 agent="GEO Agent",
                 action="Assessed live AI search visibility",
-                reason=f"Measured {body.brand} across the selected connected AI sources.",
-                status=AgentActionStatus.EXECUTED,
+                reason=(
+                    f"Measured {body.brand} across the available connected AI sources."
+                    if measured
+                    else "No connected AI source returned a successful measurement."
+                ),
+                status=AgentActionStatus.EXECUTED if measured else AgentActionStatus.FAILED,
             )
             related_action_ids.append(entry.entry_id)
-        await active_intelligence_history(request, body.mode).record_geo(
-            report,
-            related_action_ids=related_action_ids,
-        )
+        if body.mode is DataMode.DEMO or measured:
+            await active_intelligence_history(request, body.mode).record_geo(
+                report,
+                related_action_ids=related_action_ids,
+            )
         return report
 
     @app.post(
@@ -768,21 +912,30 @@ def create_app(
         ] = "local-demo",
     ) -> FeedbackCollectionResponse:
         if body.mode is DataMode.LIVE:
-            ensure_live_allowed(request.app.state.settings)
+            ensure_live_allowed(request.app.state.settings, request)
+            tenant_id = request_live_workspace_id(request, tenant_id)
+        elif app_settings.firebase_auth_required:
+            raise HTTPException(status_code=403, detail="Use the Sample workspace demo views.")
         response = await active_real_intelligence(request).feedback.collect(tenant_id, body)
         related_action_ids: list[str] = []
         if body.mode is DataMode.LIVE:
+            measured = any(item.status == "completed" for item in response.sources)
             entry = await active_audit_log(request, DataMode.LIVE).record(
                 agent="Feedback Agent",
                 action="Collected live customer feedback",
-                reason=f"Read current public Reddit and X signals for {body.brand}.",
-                status=AgentActionStatus.EXECUTED,
+                reason=(
+                    f"Read current public signals from available sources for {body.brand}."
+                    if measured
+                    else "No connected feedback source could be read successfully."
+                ),
+                status=AgentActionStatus.EXECUTED if measured else AgentActionStatus.FAILED,
             )
             related_action_ids.append(entry.entry_id)
-        await active_intelligence_history(request, body.mode).record_feedback(
-            response,
-            related_action_ids=related_action_ids,
-        )
+        if body.mode is DataMode.DEMO or measured:
+            await active_intelligence_history(request, body.mode).record_feedback(
+                response,
+                related_action_ids=related_action_ids,
+            )
         return response
 
     return app

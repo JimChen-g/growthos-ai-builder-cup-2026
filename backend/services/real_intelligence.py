@@ -29,14 +29,18 @@ from backend.models.connectors import (
     GeoPromptResult,
     GeoScanReport,
     GeoScanRequest,
+    GoogleAdsConnectionRequest,
     MetaAdsConnectionRequest,
     ProviderVisibility,
     VertexAIConnectionRequest,
 )
 from backend.models.feedback import FeedbackSignal, FeedbackSource
 from backend.services.connector_security import (
+    CredentialVault,
     CredentialVaultError,
     EncryptedCredentialVault,
+    FirestoreCredentialVault,
+    FirestoreTenantQuotaLimiter,
     QuotaExceededError,
     TenantQuotaLimiter,
 )
@@ -52,6 +56,7 @@ from integrations.geo_providers import (
     VertexAISearchConfig,
     VertexAISearchProvider,
 )
+from integrations.google_ads import GoogleAdsIntegration, GoogleAdsIntegrationConfig
 from integrations.social_sources import (
     RedditSearchFallback,
     RedditSearchFallbackConfig,
@@ -64,6 +69,7 @@ _CREDENTIAL_PROVIDERS = {
     ConnectorProvider.GEMINI,
     ConnectorProvider.PERPLEXITY,
     ConnectorProvider.X,
+    ConnectorProvider.STRIPE,
 }
 
 
@@ -87,12 +93,21 @@ class ResolvedMetaAdsConnection:
     source: str
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedGoogleAdsConnection:
+    credentials: GoogleAdsConnectionRequest
+    source: str
+
+
 class ConnectorCredentialResolver:
     """Resolve tenant vault secrets; environment secrets belong only to local-demo."""
 
-    def __init__(self, settings: Settings, vault: EncryptedCredentialVault) -> None:
+    def __init__(self, settings: Settings, vault: CredentialVault) -> None:
         self.settings = settings
         self.vault = vault
+
+    def allows_server_credentials(self, tenant_id: str) -> bool:
+        return tenant_id == "local-demo" and not self.settings.firebase_auth_required
 
     async def secret(
         self, tenant_id: str, provider: ConnectorProvider
@@ -100,13 +115,14 @@ class ConnectorCredentialResolver:
         stored = await self.vault.get(tenant_id, provider)
         if stored:
             return stored, "encrypted_vault"
-        if tenant_id != "local-demo":
+        if not self.allows_server_credentials(tenant_id):
             return None, None
         environment = {
             ConnectorProvider.OPENAI: self.settings.openai_api_key,
             ConnectorProvider.GEMINI: self.settings.gemini_api_key,
             ConnectorProvider.PERPLEXITY: self.settings.perplexity_api_key,
             ConnectorProvider.X: self.settings.x_bearer_token,
+            ConnectorProvider.STRIPE: self.settings.stripe_secret_key,
         }.get(provider)
         return (environment, "server_environment") if environment else (None, None)
 
@@ -122,13 +138,15 @@ class ConnectorCredentialResolver:
                 raise CredentialVaultError(
                     "stored Vertex AI connection configuration is invalid"
                 ) from error
+            if not api_key_value and not self.allows_server_credentials(tenant_id):
+                return None
             return ResolvedVertexAIConnection(
                 project_id=project_id,
                 location=location,
                 api_key=SecretStr(str(api_key_value)) if api_key_value else None,
                 source="encrypted_vault",
             )
-        if tenant_id != "local-demo" or not self.settings.vertex_ai_project_id:
+        if not self.allows_server_credentials(tenant_id) or not self.settings.vertex_ai_project_id:
             return None
         return ResolvedVertexAIConnection(
             project_id=self.settings.vertex_ai_project_id,
@@ -150,7 +168,7 @@ class ConnectorCredentialResolver:
                 api_version=payload.api_version,
                 source="encrypted_vault",
             )
-        if tenant_id != "local-demo" or not all(
+        if not self.allows_server_credentials(tenant_id) or not all(
             (
                 self.settings.meta_ads_access_token,
                 self.settings.meta_ads_ad_account_id,
@@ -165,18 +183,45 @@ class ConnectorCredentialResolver:
             source="server_environment",
         )
 
+    async def google_ads_connection(self, tenant_id: str) -> ResolvedGoogleAdsConnection | None:
+        stored = await self.vault.get(tenant_id, ConnectorProvider.GOOGLE_ADS)
+        if stored:
+            try:
+                credentials = GoogleAdsConnectionRequest.model_validate_json(
+                    stored.get_secret_value()
+                )
+            except ValueError as error:
+                raise CredentialVaultError("stored Google Ads configuration is invalid") from error
+            return ResolvedGoogleAdsConnection(credentials, "encrypted_vault")
+        if (
+            not self.allows_server_credentials(tenant_id)
+            or not self.settings.google_ads_has_credentials
+        ):
+            return None
+        credentials = GoogleAdsConnectionRequest(
+            developer_token=self.settings.google_ads_developer_token,
+            customer_id=self.settings.google_ads_customer_id,
+            login_customer_id=self.settings.google_ads_login_customer_id,
+            access_token=self.settings.google_ads_access_token,
+            client_id=self.settings.google_ads_client_id,
+            client_secret=self.settings.google_ads_client_secret,
+            refresh_token=self.settings.google_ads_refresh_token,
+        )
+        return ResolvedGoogleAdsConnection(credentials, "server_environment")
+
 
 class ConnectionCenterService:
     def __init__(
         self,
         settings: Settings,
-        vault: EncryptedCredentialVault,
+        vault: CredentialVault,
         resolver: ConnectorCredentialResolver,
+        quota: TenantQuotaLimiter | FirestoreTenantQuotaLimiter | None = None,
     ) -> None:
         self.settings = settings
         self.vault = vault
         self.resolver = resolver
-        self._selected_accounts: dict[tuple[str, ConnectorProvider], str] = {}
+        self.quota = quota or TenantQuotaLimiter(settings.geo_daily_provider_quota)
 
     async def center(self, tenant_id: str) -> ConnectionCenter:
         ai_statuses = [
@@ -248,9 +293,9 @@ class ConnectionCenterService:
             connections=[
                 *ai_statuses,
                 reddit,
-                self._google_ads_status(tenant_id),
+                await self._google_ads_status(tenant_id),
                 await self._meta_ads_status(tenant_id),
-                self._stripe_status(tenant_id),
+                await self._stripe_status(tenant_id),
             ],
         )
 
@@ -264,6 +309,8 @@ class ConnectionCenterService:
             raise UnsupportedConnectionError(
                 f"{provider.value} does not accept a direct credential in this center"
             )
+        if provider is ConnectorProvider.STRIPE and not secret.get_secret_value().startswith("rk_"):
+            raise UnsupportedConnectionError("Use a restricted Stripe key with read-only access.")
         await self.vault.put(tenant_id, provider, secret)
         center = await self.center(tenant_id)
         return next(item for item in center.connections if item.provider is provider)
@@ -273,6 +320,10 @@ class ConnectionCenterService:
         tenant_id: str,
         request: VertexAIConnectionRequest,
     ) -> ConnectionStatus:
+        if not request.api_key and not self.resolver.allows_server_credentials(tenant_id):
+            raise UnsupportedConnectionError(
+                "Your own Vertex AI API key is required for Live access."
+            )
         payload = {
             "project_id": request.project_id,
             "location": request.location,
@@ -298,19 +349,60 @@ class ConnectionCenterService:
             ConnectorProvider.META_ADS,
             SecretStr(json.dumps(payload, separators=(",", ":"), sort_keys=True)),
         )
-        self._selected_accounts[(tenant_id, ConnectorProvider.META_ADS)] = request.ad_account_id
         return await self._meta_ads_status(tenant_id)
 
+    async def save_google_ads_connection(
+        self, tenant_id: str, request: GoogleAdsConnectionRequest
+    ) -> ConnectionStatus:
+        payload = {
+            name: value.get_secret_value() if isinstance(value, SecretStr) else value
+            for name, value in request.model_dump(mode="python").items()
+        }
+        await self.vault.put(
+            tenant_id, ConnectorProvider.GOOGLE_ADS, SecretStr(json.dumps(payload))
+        )
+        return await self._google_ads_status(tenant_id)
+
+    async def disconnect(self, tenant_id: str, provider: ConnectorProvider) -> ConnectionStatus:
+        if provider is ConnectorProvider.REDDIT:
+            raise UnsupportedConnectionError(
+                "Reddit uses Perplexity; disconnect Perplexity instead."
+            )
+        await self.vault.delete(tenant_id, provider)
+        return next(
+            item for item in (await self.center(tenant_id)).connections if item.provider is provider
+        )
+
     async def growth_settings(self, tenant_id: str) -> Settings:
-        """Use the saved Meta connection while retaining other business-source settings."""
+        """Resolve all business credentials for this tenant; never inherit another account."""
 
         connection = await self.resolver.meta_connection(tenant_id)
         updates = {
             "data_source_mode": "live",
+            "stripe_secret_key": None,
+            "google_ads_access_token": None,
+            "google_ads_developer_token": None,
+            "google_ads_customer_id": None,
+            "google_ads_login_customer_id": None,
+            "google_ads_client_id": None,
+            "google_ads_client_secret": None,
+            "google_ads_refresh_token": None,
             "meta_ads_access_token": None,
             "meta_ads_ad_account_id": None,
             "meta_ads_api_version": None,
         }
+        if self.resolver.allows_server_credentials(tenant_id):
+            # Preserve the local developer's partially completed configuration. Hosted
+            # identities always begin with the empty credential set above.
+            for name in updates:
+                if name != "data_source_mode":
+                    updates[name] = getattr(self.settings, name)
+        stripe, _ = await self.resolver.secret(tenant_id, ConnectorProvider.STRIPE)
+        updates["stripe_secret_key"] = stripe
+        google = await self.resolver.google_ads_connection(tenant_id)
+        if google:
+            for field, value in google.credentials.model_dump(mode="python").items():
+                updates[f"google_ads_{field}"] = value
         if connection:
             updates.update(
                 meta_ads_access_token=connection.access_token,
@@ -318,6 +410,101 @@ class ConnectionCenterService:
                 meta_ads_api_version=connection.api_version,
             )
         return self.settings.model_copy(update=updates)
+
+    async def business_connection_test(
+        self, tenant_id: str, provider: ConnectorProvider
+    ) -> ConnectionTestResult:
+        """Perform bounded read-only checks with only the requesting tenant's credentials."""
+        if provider is ConnectorProvider.META_ADS:
+            return await self.meta_connection_test(tenant_id)
+        settings = await self.growth_settings(tenant_id)
+        configured = (
+            bool(settings.stripe_secret_key)
+            if provider is ConnectorProvider.STRIPE
+            else (
+                settings.google_ads_has_credentials
+                if provider is ConnectorProvider.GOOGLE_ADS
+                else False
+            )
+        )
+        if not configured:
+            return ConnectionTestResult(
+                provider=provider,
+                configured=False,
+                checked_live=False,
+                success=False,
+                message="Connect this account before testing.",
+            )
+        started = monotonic()
+        try:
+            await self.quota.consume(tenant_id, provider)
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                if provider is ConnectorProvider.STRIPE:
+                    authorization = f"Bearer {settings.stripe_secret_key.get_secret_value()}"
+                    for endpoint in ("charges", "subscriptions"):
+                        response = await client.get(
+                            f"{settings.stripe_api_base_url.rstrip('/')}/v1/{endpoint}",
+                            params={"limit": 1},
+                            headers={"Authorization": authorization},
+                        )
+                        response.raise_for_status()
+                        payload = response.json()
+                        if not isinstance(payload, dict) or not isinstance(
+                            payload.get("data"), list
+                        ):
+                            raise ValueError("invalid provider response")
+                else:
+                    adapter = GoogleAdsIntegration(
+                        GoogleAdsIntegrationConfig(
+                            access_token=settings.google_ads_access_token,
+                            developer_token=settings.google_ads_developer_token,
+                            customer_id=settings.google_ads_customer_id,
+                            login_customer_id=settings.google_ads_login_customer_id,
+                            oauth_client_id=settings.google_ads_client_id,
+                            oauth_client_secret=settings.google_ads_client_secret,
+                            oauth_refresh_token=settings.google_ads_refresh_token,
+                            api_version=settings.google_ads_api_version,
+                            api_base_url=settings.google_ads_api_base_url,
+                        ),
+                        client=client,
+                    )
+                    response = await client.post(
+                        f"{settings.google_ads_api_base_url.rstrip('/')}/{settings.google_ads_api_version}"
+                        f"/customers/{settings.google_ads_customer_id}/googleAds:search",
+                        headers=await adapter._headers(),
+                        json={"query": "SELECT customer.id FROM customer LIMIT 1"},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    if not isinstance(payload, dict) or not isinstance(
+                        payload.get("results"), list
+                    ):
+                        raise ValueError("invalid provider response")
+        except (IntegrationError, httpx.HTTPError, ValueError, QuotaExceededError) as error:
+            return ConnectionTestResult(
+                provider=provider,
+                configured=True,
+                checked_live=True,
+                success=False,
+                message=_safe_provider_error(error),
+                latency_ms=int((monotonic() - started) * 1000),
+            )
+        return ConnectionTestResult(
+            provider=provider,
+            configured=True,
+            checked_live=True,
+            success=True,
+            message="Live read-only connection verified.",
+            latency_ms=int((monotonic() - started) * 1000),
+        )
+
+    async def consume_growth_quota(self, tenant_id: str) -> None:
+        for provider in (
+            ConnectorProvider.STRIPE,
+            ConnectorProvider.GOOGLE_ADS,
+            ConnectorProvider.META_ADS,
+        ):
+            await self.quota.consume(tenant_id, provider)
 
     async def meta_connection_test(self, tenant_id: str) -> ConnectionTestResult:
         """Verify ads_read with one bounded read; never create or update an ad."""
@@ -337,6 +524,7 @@ class ConnectionCenterService:
             f"/act_{connection.ad_account_id}/insights"
         )
         try:
+            await self.quota.consume(tenant_id, ConnectorProvider.META_ADS)
             async with httpx.AsyncClient(
                 timeout=self.settings.social_request_timeout_seconds
             ) as client:
@@ -369,6 +557,9 @@ class ConnectionCenterService:
             else:
                 success = True
                 message = "Live Meta Ads read-only Insights request completed successfully."
+        except QuotaExceededError as error:
+            success = False
+            message = _safe_provider_error(error)
         except httpx.HTTPError:
             success = False
             message = "Meta could not be reached. Try again."
@@ -390,15 +581,16 @@ class ConnectionCenterService:
         if provider not in {ConnectorProvider.GOOGLE_ADS, ConnectorProvider.META_ADS}:
             raise UnsupportedConnectionError("account selection is supported for ad accounts only")
         status = (
-            self._google_ads_status(tenant_id)
+            await self._google_ads_status(tenant_id)
             if provider is ConnectorProvider.GOOGLE_ADS
             else await self._meta_ads_status(tenant_id)
         )
         if account_id not in {item.account_id for item in status.accounts}:
             raise UnsupportedConnectionError("account is not available to this connection")
-        self._selected_accounts[(tenant_id, provider)] = account_id
+        # A connection stores its chosen account durably with its credentials. Only that
+        # verified account is offered; selecting it again is an idempotent operation.
         return (
-            self._google_ads_status(tenant_id)
+            await self._google_ads_status(tenant_id)
             if provider is ConnectorProvider.GOOGLE_ADS
             else await self._meta_ads_status(tenant_id)
         )
@@ -453,7 +645,8 @@ class ConnectionCenterService:
     async def _vertex_status(self, tenant_id: str) -> ConnectionStatus:
         connection = await self.resolver.vertex_connection(tenant_id)
         configured = connection is not None
-        uses_api_key = bool(connection and connection.api_key)
+        allows_adc = self.resolver.allows_server_credentials(tenant_id)
+        uses_api_key = bool(connection and connection.api_key) or not allows_adc
         return ConnectionStatus(
             provider=ConnectorProvider.GEMINI_VERTEX,
             display_name="Gemini · Vertex AI",
@@ -475,7 +668,9 @@ class ConnectionCenterService:
             setup_label="Connect one Google Cloud project",
             setup_steps=[
                 "Enter the project ID",
-                "Use server ADC or paste one API key",
+                "Use server ADC or paste one API key"
+                if allows_adc
+                else "Paste your own Vertex AI API key",
                 "Test Google Search grounding",
             ],
             estimated_setup_minutes=5,
@@ -485,9 +680,10 @@ class ConnectionCenterService:
             ),
         )
 
-    def _google_ads_status(self, tenant_id: str) -> ConnectionStatus:
-        configured = self.settings.google_ads_has_credentials and tenant_id == "local-demo"
-        account_id = self.settings.google_ads_customer_id if configured else None
+    async def _google_ads_status(self, tenant_id: str) -> ConnectionStatus:
+        connection = await self.resolver.google_ads_connection(tenant_id)
+        configured = connection is not None
+        account_id = connection.credentials.customer_id if connection else None
         accounts = (
             [
                 ConnectionAccount(
@@ -498,9 +694,7 @@ class ConnectionCenterService:
             if account_id
             else []
         )
-        selected = self._selected_accounts.get(
-            (tenant_id, ConnectorProvider.GOOGLE_ADS), account_id
-        )
+        selected = account_id
         return ConnectionStatus(
             provider=ConnectorProvider.GOOGLE_ADS,
             display_name="Google Ads",
@@ -509,19 +703,20 @@ class ConnectionCenterService:
                 ConnectionState.CONNECTED if configured else ConnectionState.NEEDS_CONFIGURATION
             ),
             configured=configured,
-            auth_method="Server OAuth refresh token + developer token",
-            configuration_source="server_environment" if configured else None,
+            auth_method="Workspace-owned OAuth or access token + developer token",
+            configuration_source=connection.source if connection else None,
             selected_account_id=selected,
             accounts=accounts,
+            supports_live_test=True,
             setup_kind=ConnectionSetupKind.OAUTH,
-            setup_label="Configured on the GrowthOS server",
+            setup_label="Connect your Google Ads account",
             setup_steps=[
                 "Create a Google Ads OAuth client and refresh token",
-                "Add them with the developer token to the server .env",
-                "Choose the Ads account here; writes stay approval-gated",
+                "Save your credentials and customer ID in this workspace",
+                "Test the read-only connection",
             ],
             estimated_setup_minutes=3,
-            note="Read access is live; every campaign write remains founder-approval gated.",
+            note="This connection reads reporting data only; no campaigns or budgets are changed.",
         )
 
     async def _meta_ads_status(self, tenant_id: str) -> ConnectionStatus:
@@ -533,7 +728,7 @@ class ConnectionCenterService:
             if account_id
             else []
         )
-        selected = self._selected_accounts.get((tenant_id, ConnectorProvider.META_ADS), account_id)
+        selected = account_id
         return ConnectionStatus(
             provider=ConnectorProvider.META_ADS,
             display_name="Meta Ads",
@@ -562,8 +757,9 @@ class ConnectionCenterService:
             ),
         )
 
-    def _stripe_status(self, tenant_id: str) -> ConnectionStatus:
-        configured = self.settings.stripe_secret_key is not None and tenant_id == "local-demo"
+    async def _stripe_status(self, tenant_id: str) -> ConnectionStatus:
+        secret, source = await self.resolver.secret(tenant_id, ConnectorProvider.STRIPE)
+        configured = secret is not None
         return ConnectionStatus(
             provider=ConnectorProvider.STRIPE,
             display_name="Stripe",
@@ -573,13 +769,14 @@ class ConnectionCenterService:
             ),
             configured=configured,
             auth_method="Restricted secret key",
-            configuration_source="server_environment" if configured else None,
+            configuration_source=source,
+            supports_live_test=True,
             setup_kind=ConnectionSetupKind.RESTRICTED_KEY,
-            setup_label="Configured on the GrowthOS server",
+            setup_label="Connect a restricted Stripe key",
             setup_steps=[
                 "Create a restricted Stripe key",
                 "Allow read-only charges and subscriptions",
-                "Add it as STRIPE_SECRET_KEY on the server",
+                "Save the key in this workspace and test the connection",
             ],
             estimated_setup_minutes=2,
             note="Read-only revenue intelligence connection.",
@@ -592,6 +789,9 @@ class GeoProviderFactory:
         self.resolver = resolver
 
     async def build(self, tenant_id: str, provider: ConnectorProvider) -> GeoProviderClient | None:
+        timeout = self.settings.geo_request_timeout_seconds
+        if self.settings.firebase_auth_required:
+            timeout = min(timeout, 30.0)
         if provider is ConnectorProvider.GEMINI_VERTEX:
             connection = await self.resolver.vertex_connection(tenant_id)
             if not connection:
@@ -603,13 +803,12 @@ class GeoProviderFactory:
                     api_key=connection.api_key,
                     model=self.settings.vertex_ai_model,
                     api_base_url=self.settings.vertex_ai_api_base_url,
-                    request_timeout_seconds=self.settings.geo_request_timeout_seconds,
+                    request_timeout_seconds=timeout,
                 )
             )
         secret, _ = await self.resolver.secret(tenant_id, provider)
         if not secret:
             return None
-        timeout = self.settings.geo_request_timeout_seconds
         if provider is ConnectorProvider.OPENAI:
             return OpenAIWebSearchProvider(
                 OpenAIWebSearchConfig(
@@ -643,17 +842,29 @@ class GeoProviderFactory:
 class GeoPromptRunner:
     """Run identical neutral prompts across providers, then score observable mentions."""
 
-    def __init__(self, factory: GeoProviderFactory, quota: TenantQuotaLimiter) -> None:
+    def __init__(
+        self,
+        factory: GeoProviderFactory,
+        quota: TenantQuotaLimiter | FirestoreTenantQuotaLimiter,
+        *,
+        request_timeout_seconds: float = 30.0,
+        total_timeout_seconds: float = 40.0,
+    ) -> None:
         self.factory = factory
         self.quota = quota
+        self.request_timeout_seconds = request_timeout_seconds
+        self.total_timeout_seconds = total_timeout_seconds
+        self._call_slots = asyncio.Semaphore(6)
 
     async def scan(self, tenant_id: str, request: GeoScanRequest) -> GeoScanReport:
+        deadline = monotonic() + self.total_timeout_seconds
+
         async def provider_results(provider: ConnectorProvider) -> list[GeoPromptResult]:
             if request.mode is DataMode.DEMO:
                 return self._demo_results(provider, request)
-            return await self._live_results(tenant_id, provider, request)
+            return await self._live_results(tenant_id, provider, request, deadline=deadline)
 
-        # Providers run concurrently; prompts within one provider stay sequential.
+        # Bounded prompt concurrency lets the default three prompts fit the HTTP deadline.
         per_provider = await asyncio.gather(
             *(provider_results(provider) for provider in request.providers)
         )
@@ -706,16 +917,25 @@ class GeoPromptRunner:
                 )
             await self.quota.consume(tenant_id, provider)
             try:
-                answer = await client.ask("Name one widely used customer support software product.")
+                async with asyncio.timeout(self.request_timeout_seconds):
+                    async with self._call_slots:
+                        answer = await client.ask(
+                            "Name one widely used customer support software product."
+                        )
             finally:
                 await client.aclose()
-        except (IntegrationError, QuotaExceededError, UnsupportedConnectionError) as error:
+        except (
+            IntegrationError,
+            QuotaExceededError,
+            UnsupportedConnectionError,
+            TimeoutError,
+        ) as error:
             return ConnectionTestResult(
                 provider=provider,
                 configured=True,
                 checked_live=True,
                 success=False,
-                message=str(error),
+                message=_safe_provider_error(error),
                 latency_ms=int((monotonic() - started) * 1000),
             )
         return ConnectionTestResult(
@@ -736,43 +956,64 @@ class GeoPromptRunner:
         tenant_id: str,
         provider: ConnectorProvider,
         request: GeoScanRequest,
+        *,
+        deadline: float | None = None,
     ) -> list[GeoPromptResult]:
-        client = await self.factory.build(tenant_id, provider)
-        if not client:
+        deadline = deadline or (monotonic() + self.total_timeout_seconds)
+        timeout_message = "The provider request timed out. Retry the unavailable prompts."
+        results = [_error_result(provider, prompt, timeout_message) for prompt in request.prompts]
+        client = None
+        provider_slots = asyncio.Semaphore(3)
+
+        async def run_prompt(index: int, prompt: str) -> None:
+            started = monotonic()
+            try:
+                async with provider_slots, self._call_slots:
+                    async with asyncio.timeout(self.request_timeout_seconds):
+                        await self.quota.consume(tenant_id, provider)
+                        raw = await client.ask(prompt)
+                results[index] = _measured_result(
+                    provider,
+                    prompt,
+                    raw.answer,
+                    raw.citations,
+                    request.brand,
+                    request.competitors,
+                    str(request.website),
+                    int((monotonic() - started) * 1000),
+                )
+            except (IntegrationError, QuotaExceededError, TimeoutError) as error:
+                results[index] = _error_result(
+                    provider,
+                    prompt,
+                    _safe_provider_error(error),
+                    int((monotonic() - started) * 1000),
+                )
+
+        try:
+            async with asyncio.timeout(max(0.001, deadline - monotonic())):
+                client = await self.factory.build(tenant_id, provider)
+                if not client:
+                    return [
+                        _error_result(
+                            provider, prompt, "No credential is configured for live mode."
+                        )
+                        for prompt in request.prompts
+                    ]
+                await asyncio.gather(
+                    *(run_prompt(i, prompt) for i, prompt in enumerate(request.prompts))
+                )
+        except TimeoutError:
+            # Preserve completed, measured answers; uncompleted slots remain explicit errors.
+            pass
+        except (IntegrationError, UnsupportedConnectionError, CredentialVaultError) as error:
             return [
-                _error_result(provider, prompt, "No credential is configured for live mode.")
+                _error_result(provider, prompt, _safe_provider_error(error))
                 for prompt in request.prompts
             ]
-        results: list[GeoPromptResult] = []
-        try:
-            for prompt in request.prompts:
-                started = monotonic()
-                try:
-                    await self.quota.consume(tenant_id, provider)
-                    raw = await client.ask(prompt)
-                    results.append(
-                        _measured_result(
-                            provider,
-                            prompt,
-                            raw.answer,
-                            raw.citations,
-                            request.brand,
-                            request.competitors,
-                            str(request.website),
-                            int((monotonic() - started) * 1000),
-                        )
-                    )
-                except (IntegrationError, QuotaExceededError) as error:
-                    results.append(
-                        _error_result(
-                            provider,
-                            prompt,
-                            str(error),
-                            int((monotonic() - started) * 1000),
-                        )
-                    )
         finally:
-            await client.aclose()
+            if client:
+                await client.aclose()
         return results
 
     def _demo_results(
@@ -917,7 +1158,7 @@ class FeedbackCollector:
                     method,
                     "X rejected the bearer token. Replace it with a valid token and test again.",
                 )
-            return [], method, str(error)
+            return [], method, _safe_provider_error(error)
         finally:
             if client:
                 await client.aclose()
@@ -932,17 +1173,56 @@ class RealIntelligenceRuntime:
 
 def build_real_intelligence_runtime(settings: Settings | None = None) -> RealIntelligenceRuntime:
     selected = settings or Settings()
-    vault = EncryptedCredentialVault(
-        selected.connection_vault_path,
-        selected.connection_vault_key,
-    )
+    if selected.live_storage_backend == "firestore":
+        if not selected.firebase_project_id or not selected.connection_vault_key:
+            raise RuntimeError("Hosted Live requires a Firebase project and credential vault key")
+        vault: CredentialVault = FirestoreCredentialVault(
+            selected.firebase_project_id,
+            selected.firestore_database,
+            selected.connection_vault_key,
+            selected.live_data_retention_days,
+        )
+        quota = FirestoreTenantQuotaLimiter(
+            selected.firebase_project_id,
+            selected.firestore_database,
+            selected.geo_daily_provider_quota,
+        )
+    else:
+        if selected.firebase_auth_required and selected.live_self_service_enabled:
+            raise RuntimeError("Hosted Live requires persistent Firestore connector storage")
+        vault = EncryptedCredentialVault(
+            selected.connection_vault_path, selected.connection_vault_key
+        )
+        quota = TenantQuotaLimiter(selected.geo_daily_provider_quota)
     resolver = ConnectorCredentialResolver(selected, vault)
-    quota = TenantQuotaLimiter(selected.geo_daily_provider_quota)
     return RealIntelligenceRuntime(
-        connections=ConnectionCenterService(selected, vault, resolver),
-        geo=GeoPromptRunner(GeoProviderFactory(selected, resolver), quota),
+        connections=ConnectionCenterService(selected, vault, resolver, quota),
+        geo=GeoPromptRunner(
+            GeoProviderFactory(selected, resolver),
+            quota,
+            request_timeout_seconds=min(30.0, selected.geo_request_timeout_seconds),
+            total_timeout_seconds=max(0.1, min(40.0, selected.live_request_timeout_seconds - 5.0)),
+        ),
         feedback=FeedbackCollector(selected, resolver, quota),
     )
+
+
+def _safe_provider_error(error: Exception) -> str:
+    """Never return raw provider exceptions, URLs, request payloads or secrets to browsers."""
+    if isinstance(error, QuotaExceededError):
+        return "Daily provider usage limit reached. Try again tomorrow."
+    if isinstance(error, TimeoutError):
+        return "The provider request timed out. Retry the unavailable prompts."
+    status = (
+        error.status_code
+        if isinstance(error, IntegrationAPIError)
+        else (error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None)
+    )
+    if status in {401, 403}:
+        return "The provider rejected this connection. Check your credentials and account access."
+    if status == 429:
+        return "The provider's usage limit was reached. Try again later."
+    return "The provider request could not be completed. Check the connection and try again."
 
 
 def _measured_result(
@@ -1008,7 +1288,7 @@ def _provider_summary(
         ) / Decimal(len(successful))
         citation = Decimal(branded_citations) / Decimal(len(successful)) * Decimal("15")
         score = (coverage + rank + citation).quantize(Decimal("0.1"))
-        status = "completed"
+        status = "completed" if len(successful) == len(results) else "partial"
     return ProviderVisibility(
         provider=provider,
         attempted_prompts=len(results),

@@ -7,6 +7,8 @@ import { useEffect, useState } from "react";
 import { type MessageKey, useI18n } from "../lib/i18n";
 import { useDataMode, WorkspaceModeSwitch } from "./DataModeContext";
 import { LanguageSwitch } from "./LanguageSwitch";
+import { LiveSignIn } from "./LiveSignIn";
+import { PageState } from "./PageState";
 
 const navigation: Array<{ href: string; label: MessageKey; liveOnly?: boolean; sampleOnly?: boolean }> = [
   { href: "/builder-cup", label: "nav.builderCup", sampleOnly: true },
@@ -20,14 +22,15 @@ const navigation: Array<{ href: string; label: MessageKey; liveOnly?: boolean; s
 
 export function AppShell({ children, footer }: Readonly<{ children: React.ReactNode; footer?: React.ReactNode }>) {
   const pathname = usePathname().replace(/\/+$/, "") || "/";
-  const { mode, capabilities } = useDataMode();
+  const { mode, capabilities, session, sessionLoading, identity, identityKey, logout } = useDataMode();
   const { t } = useI18n();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const liveAvailable = capabilities.live_available || capabilities.live_self_service_enabled;
   const items = navigation.filter((item) =>
-    (!item.liveOnly || (mode === "live" && capabilities.live_available)) &&
+    (!item.liveOnly || (mode === "live" && liveAvailable)) &&
     (!item.sampleOnly || mode === "demo")
   );
-  const unavailableConnections = pathname === "/connections" && !capabilities.live_available;
+  const unavailableConnections = pathname === "/connections" && !liveAvailable;
 
   // Close the phone settings sheet whenever the page changes.
   useEffect(() => setSettingsOpen(false), [pathname]);
@@ -49,8 +52,13 @@ export function AppShell({ children, footer }: Readonly<{ children: React.ReactN
       <div className="control">
         <span>{t("mode.label")}</span>
         <WorkspaceModeSwitch />
-        <small>{capabilities.public_demo_only ? t("mode.publicDemoHint") : mode === "demo" ? t("mode.demoHint") : t("mode.liveHint")}</small>
+        <small>{mode === "demo" ? t("mode.demoHint") : session?.live_allowed ? t("mode.liveHint") : t("auth.loginHint")}</small>
       </div>
+      {identity && !identity.anonymous && <div className="control">
+        <span>{t("auth.account")}</span>
+        <small className="account-email">{identity.email ?? t("auth.signedIn")}</small>
+        <button className="link" disabled={sessionLoading} type="button" onClick={() => { logout().catch(() => undefined); }}>{t("auth.signOut")}</button>
+      </div>}
       <div className="control">
         <span>{t("lang.label")}</span>
         <LanguageSwitch />
@@ -77,7 +85,7 @@ export function AppShell({ children, footer }: Readonly<{ children: React.ReactN
           <span className="brand-mark" aria-hidden="true" />
           <strong>GrowthOS</strong>
         </Link>
-        <span className={`mode-chip mode-${mode}`}>{capabilities.public_demo_only ? t("mode.publicDemo") : mode === "demo" ? t("mode.demo") : t("mode.live")}</span>
+        <span className={`mode-chip mode-${mode}`}>{mode === "demo" ? t("mode.demo") : t("mode.live")}</span>
         <button
           aria-controls="settings-sheet"
           aria-expanded={settingsOpen}
@@ -102,8 +110,8 @@ export function AppShell({ children, footer }: Readonly<{ children: React.ReactN
         </>
       )}
 
-      <div className="content" key={mode}>
-        {unavailableConnections ? (
+      <div className="content" key={identityKey}>
+        {sessionLoading ? <PageState /> : mode === "live" && !session?.live_allowed ? <LiveSignIn /> : unavailableConnections ? (
           <main className="page">
             <h1>{t("mode.publicConnectionsTitle")}</h1>
             <p className="lead">{t("mode.publicConnectionsHint")}</p>

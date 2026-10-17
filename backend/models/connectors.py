@@ -165,6 +165,46 @@ class MetaAdsConnectionRequest(BaseModel):
         return value.removeprefix("act_")
 
 
+class GoogleAdsConnectionRequest(BaseModel):
+    """Tenant-owned Google Ads reporting credentials; no campaign mutation is enabled."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    developer_token: SecretStr
+    customer_id: str = Field(min_length=1, max_length=32, pattern=r"^[\d-]+$")
+    login_customer_id: str | None = Field(default=None, pattern=r"^[\d-]+$")
+    access_token: SecretStr | None = None
+    client_id: str | None = Field(default=None, min_length=1, max_length=500)
+    client_secret: SecretStr | None = None
+    refresh_token: SecretStr | None = None
+
+    @field_validator("developer_token", "access_token", "client_secret", "refresh_token")
+    @classmethod
+    def validate_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and not 8 <= len(value.get_secret_value().strip()) <= 5000:
+            raise ValueError("credential must contain between 8 and 5000 characters")
+        return value
+
+    @field_validator("customer_id", "login_customer_id")
+    @classmethod
+    def normalize_account(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.replace("-", "")
+        if not normalized.isdigit():
+            raise ValueError("account ID must contain digits")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_authentication(self) -> "GoogleAdsConnectionRequest":
+        refresh = (self.client_id, self.client_secret, self.refresh_token)
+        if any(refresh) and not all(refresh):
+            raise ValueError("OAuth requires client ID, client secret and refresh token together")
+        if not self.access_token and not all(refresh):
+            raise ValueError("an access token or complete OAuth credentials are required")
+        return self
+
+
 class AccountSelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

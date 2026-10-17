@@ -52,10 +52,10 @@ type WorkflowRun = {
 };
 
 export default function ActionsPage() {
-  const { capabilities } = useDataMode();
+  const { capabilities, mode } = useDataMode();
   const { t } = useI18n();
 
-  if (capabilities.public_demo_only) {
+  if (capabilities.public_demo_only && mode === "demo") {
     return (
       <main className="page">
         <h1>{t("actions.title")}</h1>
@@ -96,6 +96,7 @@ function PrivateActionsPage() {
     });
 
   useEffect(() => {
+    if (mode !== "demo") return;
     const runId = new URLSearchParams(window.location.search).get("runId");
     if (!runId) return;
     setBusy(true);

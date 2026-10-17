@@ -6,8 +6,8 @@ Two independent guards:
   ``Authorization: Bearer <token>``. Without a token the API answers only direct loopback
   clients, which keeps local development friction-free and makes an accidentally exposed
   server refuse remote callers instead of serving live business data.
-* **Public demo mode.** ``PUBLIC_DEMO_ONLY=true`` refuses every Live route, so a hosted
-  demo can never read connected accounts or spend provider quota.
+* **Public demo mode.** Shared workflows remain closed. An explicit self-service opt-in
+  permits verified, non-anonymous users to access only their own read-only Live workspace.
 """
 
 import hashlib
@@ -36,9 +36,16 @@ _SHARED_WORKSPACE_PREFIXES = (
     "/api/v1/audit-proof",
     "/api/v1/intelligence-history",
 )
+_PRIVATE_READ_PREFIXES = (
+    "/api/v1/audit-log",
+    "/api/v1/audit-proof",
+    "/api/v1/intelligence-history",
+)
+_PRIVATE_ACTION_PATHS = {"/api/v1/geo/scans", "/api/v1/feedback/collect"}
 LOCAL_PRINCIPAL = "local"
 TOKEN_PRINCIPAL = "token"
 FIREBASE_PRINCIPAL = "firebase"
+_PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Authorization"}
 
 
 def _bearer_token(request: Request) -> str | None:
@@ -57,6 +64,34 @@ def workspace_id_for_uid(uid: str) -> str:
     """Derive a non-reversible public-demo workspace identifier from a verified Firebase uid."""
 
     return hashlib.sha256(f"growthos-public-demo:{uid}".encode()).hexdigest()[:32]
+
+
+def live_workspace_id_for_uid(uid: str) -> str:
+    """Keep private business data separate from the same user's synthetic demo history."""
+
+    return hashlib.sha256(f"growthos-private-live:{uid}".encode()).hexdigest()[:32]
+
+
+def is_formal_identity(claims: dict[str, Any]) -> bool:
+    provider = claims.get("firebase", {}).get("sign_in_provider")
+    return provider in {"google.com", "password"} and claims.get("email_verified") is True
+
+
+def live_access_allowed(request: Request, settings: Settings) -> bool:
+    if getattr(request.state, "principal", None) == FIREBASE_PRINCIPAL:
+        return settings.live_self_service_enabled and bool(
+            getattr(request.state, "formal_identity", False)
+        )
+    return not settings.public_demo_only
+
+
+def request_live_workspace_id(request: Request, local_tenant: str = "local-demo") -> str:
+    """Firebase callers can never select a tenant via headers, request bodies or URLs."""
+
+    if getattr(request.state, "principal", None) == FIREBASE_PRINCIPAL:
+        ensure_live_allowed(request.app.state.settings, request)
+        return live_workspace_id_for_uid(request.state.firebase_uid)
+    return local_tenant
 
 
 def _verify_firebase_token(token: str, project_id: str) -> dict[str, Any]:
@@ -88,7 +123,7 @@ def install_access_control(app: FastAPI, settings: Settings) -> None:
                 return JSONResponse(
                     {"detail": "A Firebase identity token is required."},
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    headers={"WWW-Authenticate": "Bearer"},
+                    headers={**_PRIVATE_HEADERS, "WWW-Authenticate": "Bearer"},
                 )
             try:
                 claims = await to_thread(
@@ -101,19 +136,20 @@ def install_access_control(app: FastAPI, settings: Settings) -> None:
                 return JSONResponse(
                     {"detail": "The Firebase identity token is invalid or expired."},
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    headers={"WWW-Authenticate": "Bearer"},
+                    headers={**_PRIVATE_HEADERS, "WWW-Authenticate": "Bearer"},
                 )
             uid = str(claims["sub"])
             request.state.principal = FIREBASE_PRINCIPAL
             request.state.firebase_uid = uid
             request.state.workspace_id = workspace_id_for_uid(uid)
+            request.state.formal_identity = is_formal_identity(claims)
         elif expected:
             supplied = _bearer_token(request)
             if not supplied or not hmac.compare_digest(supplied, expected):
                 return JSONResponse(
                     {"detail": "A valid API access token is required."},
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    headers={"WWW-Authenticate": "Bearer"},
+                    headers={**_PRIVATE_HEADERS, "WWW-Authenticate": "Bearer"},
                 )
             request.state.principal = TOKEN_PRINCIPAL
         elif _is_direct_loopback(request):
@@ -128,20 +164,40 @@ def install_access_control(app: FastAPI, settings: Settings) -> None:
                     )
                 },
                 status_code=status.HTTP_401_UNAUTHORIZED,
+                headers=_PRIVATE_HEADERS,
             )
 
-        if settings.public_demo_only and (
-            path.startswith(_LIVE_ONLY_PREFIXES) or request.query_params.get("mode") == "live"
-        ):
+        private_request = (
+            path.startswith(_LIVE_ONLY_PREFIXES)
+            or request.query_params.get("mode") == "live"
+            or path in _PRIVATE_ACTION_PATHS
+        )
+        live_allowed = live_access_allowed(request, settings)
+        if private_request and not live_allowed:
             return JSONResponse(
-                {"detail": "This deployment serves the Demo workspace only."},
+                {"detail": "Sign in with a verified account to use your own Live connections."},
                 status_code=status.HTTP_403_FORBIDDEN,
+                headers=_PRIVATE_HEADERS,
             )
-        if settings.public_demo_only and (
-            path.startswith(_SHARED_WORKSPACE_PREFIXES)
+        safe_private_route = live_allowed and (
+            path.startswith(_LIVE_ONLY_PREFIXES)
+            or path in _PRIVATE_ACTION_PATHS
             or (
-                request.method not in {"GET", "HEAD"}
-                and not path.startswith("/api/v1/competition/")
+                path.startswith(_PRIVATE_READ_PREFIXES)
+                and request.query_params.get("mode") == "live"
+                and request.method in {"GET", "HEAD"}
+            )
+        )
+        guarded_deployment = settings.public_demo_only or settings.firebase_auth_required
+        if (
+            guarded_deployment
+            and not safe_private_route
+            and (
+                path.startswith(_SHARED_WORKSPACE_PREFIXES)
+                or (
+                    request.method not in {"GET", "HEAD"}
+                    and not path.startswith("/api/v1/competition/")
+                )
             )
         ):
             # Legacy local workflows and their ledgers share process-wide state. Public
@@ -150,19 +206,24 @@ def install_access_control(app: FastAPI, settings: Settings) -> None:
             return JSONResponse(
                 {"detail": "Use the session-isolated AI decision demo for public actions."},
                 status_code=status.HTTP_403_FORBIDDEN,
+                headers=_PRIVATE_HEADERS,
             )
-        return await call_next(request)
+        response = await call_next(request)
+        # Never let Hosting/CDN/browser caches replay one user's business results to another.
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Vary"] = "Authorization"
+        return response
 
     app.middleware("http")(access_control)
 
 
-def ensure_live_allowed(settings: Settings) -> None:
+def ensure_live_allowed(settings: Settings, request: Request | None = None) -> None:
     """Guard request bodies that select Live mode (geo scans, feedback collection)."""
 
-    if settings.public_demo_only:
+    if not (live_access_allowed(request, settings) if request else not settings.public_demo_only):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="This deployment serves the Demo workspace only.",
+            detail="Sign in with a verified account to use your own Live connections.",
         )
 
 
@@ -171,7 +232,8 @@ def approver_identity(request: Request, settings: Settings, claimed_actor: str) 
 
     principal = getattr(request.state, "principal", LOCAL_PRINCIPAL)
     if principal == FIREBASE_PRINCIPAL:
-        return f"anonymous:{request.state.workspace_id[:12]}"
+        kind = "user" if getattr(request.state, "formal_identity", False) else "anonymous"
+        return f"{kind}:{request.state.workspace_id[:12]}"
     if principal == TOKEN_PRINCIPAL:
         return f"{settings.api_principal_name} (API token)"
     return f"{claimed_actor} (local)"

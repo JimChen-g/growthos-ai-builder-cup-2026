@@ -22,4 +22,5 @@ blockchain/node_modules
 docs
 tests
 work
+outputs
 .DS_Store

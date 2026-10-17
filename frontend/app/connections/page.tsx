@@ -5,7 +5,9 @@ import { useEffect, useState } from "react";
 
 import { useDataMode } from "../../components/DataModeContext";
 import { PageState } from "../../components/PageState";
+import { Segmented } from "../../components/Segmented";
 import {
+  ApiError,
   getJson,
   requestJson,
   type ConnectionCenter,
@@ -20,7 +22,7 @@ const GROUPS: Array<{ title: MessageKey; hint: MessageKey; providers: ConnectorP
   { title: "connections.ai", hint: "connections.aiHint", providers: ["openai", "gemini", "gemini_vertex", "perplexity"] },
   { title: "connections.voice", hint: "connections.voiceHint", providers: ["x", "reddit"] },
 ];
-const KEY_PROVIDERS: ConnectorProvider[] = ["openai", "gemini", "perplexity", "x"];
+const KEY_PROVIDERS: ConnectorProvider[] = ["stripe", "openai", "gemini", "perplexity", "x"];
 
 export default function ConnectionsPage() {
   const { mode } = useDataMode();
@@ -59,6 +61,7 @@ export default function ConnectionsPage() {
     <main className="page">
       <h1>{t("connections.title")}</h1>
       <p className="lead">{t("connections.subtitle")}</p>
+      <p className="note">{t("connections.privateHint")}</p>
       {GROUPS.map((group) => {
         const items = group.providers
           .map((provider) => center.connections.find((item) => item.provider === provider))
@@ -87,6 +90,7 @@ export default function ConnectionsPage() {
 
 function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged: () => void }) {
   const { t, tx } = useI18n();
+  const { capabilities } = useDataMode();
   const [secret, setSecret] = useState("");
   const [vertex, setVertex] = useState({ projectId: item.project_id ?? "", location: item.location ?? "global", apiKey: "" });
   const [meta, setMeta] = useState({ accessToken: "", adAccountId: item.selected_account_id ?? "", apiVersion: item.api_version ?? "" });
@@ -111,7 +115,7 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
       onChanged();
       return true;
     } catch (caught) {
-      setMessage(caught instanceof Error ? tx(caught.message) : t("common.error"));
+      setMessage(t(caught instanceof ApiError && [400, 409, 422].includes(caught.status) ? "connections.invalid" : "live.requestError"));
       return false;
     } finally {
       setBusy(false);
@@ -145,12 +149,14 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
               }}
             >
               <label className="field">
-                <span>{t("connections.key")}</span>
-                <input autoComplete="new-password" id={`key-${item.provider}`} onChange={(e) => setSecret(e.target.value)} type="password" value={secret} />
+                <span>{t(item.provider === "stripe" ? "connections.stripeKey" : "connections.key")}</span>
+                <input autoComplete="new-password" disabled={busy} id={`key-${item.provider}`} onChange={(e) => setSecret(e.target.value)} type="password" value={secret} />
               </label>
               <button className="button quiet" disabled={busy || !secret.trim()} type="submit">{t("connections.save")}</button>
             </form>
           )}
+
+          {item.provider === "google_ads" && <GoogleAdsForm item={item} busy={busy} act={act} />}
 
           {item.provider === "gemini_vertex" && (
             <form
@@ -168,13 +174,13 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
                       }),
                     }),
                   t("connections.saved"),
-                );
+                ).then((saved) => { if (saved) setVertex((current) => ({ ...current, apiKey: "" })); });
               }}
             >
-              <label className="field"><span>{t("connections.projectId")}</span><input id="vertex-project" onChange={(e) => setVertex({ ...vertex, projectId: e.target.value })} value={vertex.projectId} /></label>
-              <label className="field"><span>{t("connections.location")}</span><input id="vertex-location" onChange={(e) => setVertex({ ...vertex, location: e.target.value })} value={vertex.location} /></label>
-              <label className="field"><span>{t("connections.optionalKey")}</span><input autoComplete="new-password" id="vertex-key" onChange={(e) => setVertex({ ...vertex, apiKey: e.target.value })} type="password" value={vertex.apiKey} /></label>
-              <button className="button quiet" disabled={busy || !vertex.projectId.trim()} type="submit">{t("connections.save")}</button>
+              <label className="field"><span>{t("connections.projectId")}</span><input disabled={busy} id="vertex-project" onChange={(e) => setVertex({ ...vertex, projectId: e.target.value })} value={vertex.projectId} /></label>
+              <label className="field"><span>{t("connections.location")}</span><input disabled={busy} id="vertex-location" onChange={(e) => setVertex({ ...vertex, location: e.target.value })} value={vertex.location} /></label>
+              <label className="field"><span>{t(capabilities.live_self_service_enabled ? "connections.vertexKey" : "connections.optionalKey")}</span><input autoComplete="new-password" disabled={busy} id="vertex-key" onChange={(e) => setVertex({ ...vertex, apiKey: e.target.value })} type="password" value={vertex.apiKey} /></label>
+              <button className="button quiet" disabled={busy || !vertex.projectId.trim() || (capabilities.live_self_service_enabled && !vertex.apiKey.trim())} type="submit">{t("connections.save")}</button>
             </form>
           )}
 
@@ -215,7 +221,7 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
             </form>
           )}
 
-          {!KEY_PROVIDERS.includes(item.provider) && item.provider !== "gemini_vertex" && item.provider !== "meta_ads" && item.provider !== "reddit" && (
+          {!KEY_PROVIDERS.includes(item.provider) && item.provider !== "google_ads" && item.provider !== "gemini_vertex" && item.provider !== "meta_ads" && item.provider !== "reddit" && (
             <p className="muted">{t("connections.serverManaged")}</p>
           )}
 
@@ -223,6 +229,7 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
             <label className="field">
               <span>{t("connections.account")}</span>
               <select
+                disabled={busy}
                 id={`account-${item.provider}`}
                 onChange={(event) =>
                   act(() => requestJson(`/api/v1/connections/${item.provider}/account`, { method: "POST", body: JSON.stringify({ account_id: event.target.value }) }))
@@ -246,12 +253,72 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
               >
                 {busy ? t("connections.testing") : t("connections.test")}
               </button>
-              {test && <span className={`note ${test.success ? "" : "warn"}`}>{tx(test.message)}</span>}
+              {test && <span className={`note ${test.success ? "" : "warn"}`}>{t(test.success ? test.checked_live ? "connections.testPassed" : "connections.configuredOnly" : "connections.testFailed")}</span>}
             </div>
           )}
+          {item.configured && item.configuration_source !== "server_environment" && item.provider !== "reddit" && <div className="actions-row">
+            <button className="link" disabled={busy} type="button" onClick={() => {
+              act(() => requestJson(`/api/v1/connections/${item.provider}`, { method: "DELETE" }), t("connections.disconnected"))
+                .then((done) => { if (done) { setSecret(""); setVertex((current) => ({ ...current, apiKey: "" })); setMeta((current) => ({ ...current, accessToken: "" })); } });
+            }}>{t("connections.disconnect")}</button>
+          </div>}
           {message && <p className="note">{message}</p>}
         </details>
       </div>
     </li>
+  );
+}
+
+function GoogleAdsForm({ item, busy, act }: {
+  item: ConnectionStatus;
+  busy: boolean;
+  act: (work: () => Promise<unknown>, success?: string) => Promise<boolean>;
+}) {
+  const { t } = useI18n();
+  const [method, setMethod] = useState<"oauth" | "access">("oauth");
+  const [form, setForm] = useState({
+    developer_token: "", customer_id: item.selected_account_id ?? "", login_customer_id: "",
+    access_token: "", client_id: "", client_secret: "", refresh_token: "",
+  });
+  const change = (field: keyof typeof form, value: string) => setForm((current) => ({ ...current, [field]: value }));
+  const complete = form.developer_token.trim() && form.customer_id.trim() && (method === "access"
+    ? form.access_token.trim() : form.client_id.trim() && form.client_secret.trim() && form.refresh_token.trim());
+  const field = (name: keyof typeof form, label: MessageKey, secret = false) => (
+    <label className="field" key={name}>
+      <span>{t(label)}</span>
+      <input autoComplete={secret ? "new-password" : "off"} disabled={busy} id={`google-${name}`} type={secret ? "password" : "text"} value={form[name]} onChange={(event) => change(name, event.target.value)} />
+    </label>
+  );
+  return (
+    <form className="stack-form" onSubmit={(event) => {
+      event.preventDefault();
+      if (!complete || busy) return;
+      const body = {
+        developer_token: form.developer_token.trim(), customer_id: form.customer_id.replace(/[-\s]/g, ""),
+        ...(form.login_customer_id.trim() ? { login_customer_id: form.login_customer_id.replace(/[-\s]/g, "") } : {}),
+        ...(method === "access" ? { access_token: form.access_token.trim() } : {
+          client_id: form.client_id.trim(), client_secret: form.client_secret.trim(), refresh_token: form.refresh_token.trim(),
+        }),
+      };
+      act(() => requestJson("/api/v1/connections/google_ads/config", { method: "PUT", body: JSON.stringify(body) }), t("connections.saved"))
+        .then((saved) => { if (saved) setForm((current) => ({ ...current, developer_token: "", access_token: "", client_secret: "", refresh_token: "" })); });
+    }}>
+      {field("developer_token", "connections.googleDeveloperToken", true)}
+      {field("customer_id", "connections.googleCustomerId")}
+      {field("login_customer_id", "connections.googleManagerId")}
+      <Segmented label={t("connections.googleAuthMethod")} value={method} onChange={(next) => {
+        setMethod(next);
+        setForm((current) => ({ ...current, access_token: "", client_secret: "", refresh_token: "" }));
+      }} options={[{ id: "oauth", label: t("connections.googleOAuth") }, { id: "access", label: t("connections.googleAccess") }]} />
+      {method === "access" ? <>
+        <p className="note">{t("connections.googleAccessHint")}</p>
+        {field("access_token", "connections.googleAccessToken", true)}
+      </> : <>
+        {field("client_id", "connections.googleClientId")}
+        {field("client_secret", "connections.googleClientSecret", true)}
+        {field("refresh_token", "connections.googleRefreshToken", true)}
+      </>}
+      <button className="button quiet" disabled={busy || !complete} type="submit">{t("connections.save")}</button>
+    </form>
   );
 }
