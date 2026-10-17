@@ -68,6 +68,14 @@ class VertexDecisionGenerator:
             },
         }
         response: httpx.Response | None = None
+        # ``request_timeout_seconds`` is the budget for the whole model operation, not for each
+        # retry. Keep the two-attempt path below Firebase Hosting's 60-second proxy limit.
+        retry_delay_budget = 0.25 * sum(range(1, self.config.max_attempts))
+        attempt_timeout = max(
+            1.0,
+            (self.config.request_timeout_seconds - retry_delay_budget)
+            / self.config.max_attempts,
+        )
         for attempt in range(1, self.config.max_attempts + 1):
             try:
                 response = await self._client.post(
@@ -77,6 +85,7 @@ class VertexDecisionGenerator:
                         "Content-Type": "application/json",
                     },
                     json=body,
+                    timeout=attempt_timeout,
                 )
             except httpx.TimeoutException as error:
                 if attempt == self.config.max_attempts:
