@@ -182,3 +182,17 @@ Hosting again because `pinTag` otherwise continues to use the previous API revis
   fixtures, plus tenant isolation, provider rejection, quotas and storage outages. These tests do
   not establish real-provider account acceptance. Judges must enter their own valid read-only
   credentials, test the sources, and load Growth; no operator credentials are migrated.
+
+Release verification: source `4d6e5c3` was published as Cloud Run revision
+`growthos-builder-cup-api-00004-8qz` with 100% traffic, and Hosting was published with its API
+rewrite pinned to that revision. The runtime identity, CPU 1, memory 512 MiB, max instances 2,
+concurrency 20 and timeout 55 seconds remain unchanged. Health and capabilities checks passed;
+unauthenticated Connections returned 401 with `Cache-Control: private, no-store`.
+
+All 251 backend tests and 38 frontend tests passed, along with Ruff, TypeScript and the production
+build. In the authenticated public browser, Today, Growth and Connections all loaded the real empty
+workspace (0/3 business providers), without the previous generic failure. Growth disabled the read
+button and named the missing sources; Connections exposed the blank currency field and disabled
+save/test until configured. Growth setup guidance was checked in English, Simplified Chinese and
+Traditional Chinese. Actual provider data and nonempty deployed states remain pending the judge's
+own credentials; they are covered only by controlled offline regression fixtures at this stage.
