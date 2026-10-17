@@ -7,7 +7,7 @@ const ts = require("typescript");
 
 const frontend = path.resolve(__dirname, "..");
 
-function loadAuth(auth, signIn) {
+function loadAuth(auth, signIn, options = {}) {
   const exports = {};
   const source = ts.transpileModule(fs.readFileSync(path.join(frontend, "lib/firebase.ts"), "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -15,6 +15,8 @@ function loadAuth(auth, signIn) {
   vm.runInNewContext(source, {
     exports,
     window: {},
+    setTimeout: options.setTimeout ?? setTimeout,
+    clearTimeout: options.clearTimeout ?? clearTimeout,
     process: { env: {
       NEXT_PUBLIC_FIREBASE_API_KEY: "test-key",
       NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: "test.invalid",
@@ -23,11 +25,15 @@ function loadAuth(auth, signIn) {
     } },
     require(name) {
       if (name === "@firebase/app") return { getApps: () => [{}], getApp: () => ({}) };
-      if (name === "@firebase/auth") return { getAuth: () => auth, signInAnonymously: signIn };
+      if (name === "@firebase/auth") return {
+        getAuth: () => auth, signInAnonymously: signIn,
+        GoogleAuthProvider: class { setCustomParameters() {} },
+        ...options.firebase,
+      };
       throw new Error(`Unexpected import: ${name}`);
     },
   });
-  return exports.getFirebaseIdToken;
+  return Object.assign(exports.getFirebaseIdToken, exports);
 }
 
 test("requests obtain the current token instead of retaining an expired first token", async () => {
@@ -89,6 +95,61 @@ test("Live token comes from the formal user and is discarded if identity changes
   assert.equal(await getToken(false, true), "alice-token");
   user.getIdToken = async () => { auth.currentUser = { uid: "bob" }; return "alice-token"; };
   await assert.rejects(getToken(true, true), /identity-changing/);
+});
+
+test("Google popup opens in the click gesture and unsupported popups time out without blocking retry", async () => {
+  const timers = [];
+  const popups = [];
+  const auth = { currentUser: { uid: "anonymous", isAnonymous: true, getIdToken: async () => "anon-token" }, authStateReady: async () => {} };
+  const module = loadAuth(auth, () => assert.fail("no anonymous sign-in needed"), {
+    setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
+    clearTimeout: () => {},
+    firebase: { signInWithPopup: () => new Promise((resolve) => popups.push(resolve)) },
+  });
+  const first = module.signInWithGoogle();
+  assert.equal(popups.length, 1, "popup must open synchronously before any await");
+  assert.equal(timers[0].delay, 45000);
+  await assert.rejects(module(), /identity-changing/);
+  timers[0].callback();
+  await assert.rejects(first, /popup-timeout/);
+  assert.equal(await module(), "anon-token", "a blocked popup must not hold the identity lock forever");
+  const retry = module.signInWithGoogle();
+  assert.equal(popups.length, 2);
+  popups[0]({ user: auth.currentUser });
+  await Promise.resolve();
+  await assert.rejects(module(), /identity-changing/, "late first popup must not unlock the retry");
+  popups[1]({ user: auth.currentUser });
+  await retry;
+  assert.equal(await module(), "anon-token");
+});
+
+test("pending interactive authentication keeps visible sign-in guidance instead of a loading-only screen", () => {
+  const React = require("react");
+  const { renderToStaticMarkup } = require("react-dom/server");
+  const exports = {};
+  const source = ts.transpileModule(fs.readFileSync(path.join(frontend, "components/AppShell.tsx"), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText;
+  vm.runInNewContext(source, {
+    exports,
+    require(name) {
+      if (name === "react" || name === "react/jsx-runtime") return require(name);
+      if (name === "next/link") return { default: ({ children, ...props }) => React.createElement("a", props, children) };
+      if (name === "next/navigation") return { usePathname: () => "/" };
+      if (name === "../lib/i18n") return { useI18n: () => ({ t: (key) => key }) };
+      if (name === "./DataModeContext") return { WorkspaceModeSwitch: () => null, useDataMode: () => ({
+        mode: "live", capabilities: { live_self_service_enabled: true }, session: null,
+        sessionLoading: true, authPending: true, identity: null, identityKey: "guest", logout: async () => {},
+      }) };
+      if (name === "./LanguageSwitch") return { LanguageSwitch: () => null };
+      if (name === "./LiveSignIn") return { LiveSignIn: () => React.createElement("div", null, "visible-sign-in-guidance") };
+      if (name === "./PageState") return { PageState: () => React.createElement("div", null, "loading-only") };
+      throw new Error(`Unexpected import: ${name}`);
+    },
+  });
+  const html = renderToStaticMarkup(React.createElement(exports.AppShell, null, "private-account-data"));
+  assert.match(html, /visible-sign-in-guidance/);
+  assert.doesNotMatch(html, /loading-only|private-account-data/);
 });
 
 function loadApi(fetchResponse, options = {}) {

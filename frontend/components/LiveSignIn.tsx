@@ -1,23 +1,13 @@
 "use client";
 
-import { useState } from "react";
-
 import { useI18n } from "../lib/i18n";
 import { useDataMode } from "./DataModeContext";
 
 export function LiveSignIn() {
-  const { identity, login, sessionError, retrySession, session, authError } = useDataMode();
+  const { identity, login, sessionError, sessionLoading, retrySession, session, authError, authPending } = useDataMode();
   const { t } = useI18n();
-  const [error, setError] = useState(false);
-  const [busy, setBusy] = useState(false);
   const registered = identity && !identity.anonymous;
-
-  async function signIn() {
-    setBusy(true);
-    setError(false);
-    try { await login(); } catch { setError(true); }
-    finally { setBusy(false); }
-  }
+  const busy = authPending || sessionLoading;
 
   return (
     <main className="page">
@@ -26,10 +16,12 @@ export function LiveSignIn() {
       <p className="lead">{t(registered ? "auth.verifyBody" : "auth.loginBody")}</p>
       <p className="note">{t("auth.readOnly")}</p>
       <div className="actions-row">
-        <button className="button" disabled={busy} onClick={signIn} type="button">{t(busy ? "auth.signingIn" : registered ? "auth.switchAccount" : "auth.google")}</button>
-        {(sessionError || (session?.authenticated && !session.live_allowed)) && <button className="button quiet" onClick={retrySession} type="button">{t("mode.retry")}</button>}
+        <button className="button" disabled={busy} onClick={() => { login().catch(() => undefined); }} type="button">{t(authPending ? "auth.signingIn" : sessionLoading ? "auth.checking" : registered ? "auth.switchAccount" : "auth.google")}</button>
+        {(sessionError || (session?.authenticated && !session.live_allowed)) && <button className="button quiet" disabled={busy} onClick={retrySession} type="button">{t("mode.retry")}</button>}
       </div>
-      {(error || authError || sessionError) && <p className="outcome" role="alert">{t("auth.error")}</p>}
+      {authPending && <p className="outcome" role="status">{t("auth.popupPending")}</p>}
+      {(authPending || authError) && <p className="note">{t("auth.browserHint")}</p>}
+      {(authError || sessionError) && !authPending && <p className="outcome" role="alert">{t("auth.error")}</p>}
     </main>
   );
 }

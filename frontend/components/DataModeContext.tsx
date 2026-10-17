@@ -18,6 +18,7 @@ type DataModeContextValue = {
   sessionLoading: boolean;
   sessionError: boolean;
   authError: boolean;
+  authPending: boolean;
   identity: FirebaseIdentity | null;
   identityKey: string;
   login: () => Promise<void>;
@@ -36,6 +37,7 @@ export function DataModeProvider({ children }: Readonly<{ children: ReactNode }>
   const [sessionLoading, setSessionLoading] = useState(true);
   const [sessionError, setSessionError] = useState(false);
   const [authError, setAuthError] = useState(false);
+  const [authPending, setAuthPending] = useState(false);
   const [sessionAttempt, setSessionAttempt] = useState(0);
   const { t } = useI18n();
 
@@ -73,10 +75,18 @@ export function DataModeProvider({ children }: Readonly<{ children: ReactNode }>
   }, [attempt]);
 
   useEffect(() => {
-    if (!capabilities || identity === undefined) return;
+    if (!capabilities || identity === undefined || authPending) return;
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 15000);
     let disposed = false;
+    const timeout = window.setTimeout(() => {
+      controller.abort();
+      if (!disposed) {
+        disposed = true;
+        setSession(null);
+        setSessionError(true);
+        setSessionLoading(false);
+      }
+    }, 15000);
     setSessionLoading(true);
     setSessionError(false);
     requestJson<unknown>("/api/v1/me", { signal: controller.signal })
@@ -89,7 +99,7 @@ export function DataModeProvider({ children }: Readonly<{ children: ReactNode }>
       .catch(() => { if (!disposed) { setSession(null); setSessionError(true); } })
       .finally(() => { window.clearTimeout(timeout); if (!disposed) setSessionLoading(false); });
     return () => { disposed = true; window.clearTimeout(timeout); controller.abort(); };
-  }, [capabilities, identity, sessionAttempt]);
+  }, [capabilities, identity, sessionAttempt, authPending]);
 
   const setMode = useCallback((nextMode: DataMode) => {
     const available = capabilities?.live_available || capabilities?.live_self_service_enabled;
@@ -97,11 +107,12 @@ export function DataModeProvider({ children }: Readonly<{ children: ReactNode }>
   }, [capabilities]);
   const login = useCallback(async () => {
     setAuthError(false);
+    setAuthPending(true);
     setSession(null);
     setSessionLoading(true);
     try { await signInWithGoogle(); }
     catch (error) { setAuthError(true); throw error; }
-    finally { setSessionAttempt((value) => value + 1); }
+    finally { setAuthPending(false); setSessionAttempt((value) => value + 1); }
   }, []);
   const logout = useCallback(async () => {
     setAuthError(false);
@@ -120,10 +131,10 @@ export function DataModeProvider({ children }: Readonly<{ children: ReactNode }>
   }, [mode, capabilities]);
 
   const value = useMemo(() => capabilities ? ({
-    mode, setMode, capabilities, session, sessionLoading, sessionError, authError, identity: identity ?? null,
+    mode, setMode, capabilities, session, sessionLoading, sessionError, authError, authPending, identity: identity ?? null,
     identityKey: `${identity?.uid ?? "guest"}:${session?.workspace_id ?? "pending"}:${mode}`,
     login, logout, retrySession,
-  }) : null, [mode, setMode, capabilities, session, sessionLoading, sessionError, authError, identity, login, logout, retrySession]);
+  }) : null, [mode, setMode, capabilities, session, sessionLoading, sessionError, authError, authPending, identity, login, logout, retrySession]);
   if (failed) return (
     <main className="workspace-boot" role="alert">
       <h1>{t("mode.unavailableTitle")}</h1>

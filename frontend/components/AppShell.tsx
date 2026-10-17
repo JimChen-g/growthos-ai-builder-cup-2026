@@ -22,7 +22,7 @@ const navigation: Array<{ href: string; label: MessageKey; liveOnly?: boolean; s
 
 export function AppShell({ children, footer }: Readonly<{ children: React.ReactNode; footer?: React.ReactNode }>) {
   const pathname = usePathname().replace(/\/+$/, "") || "/";
-  const { mode, capabilities, session, sessionLoading, identity, identityKey, logout } = useDataMode();
+  const { mode, capabilities, session, sessionLoading, authPending, identity, identityKey, logout } = useDataMode();
   const { t } = useI18n();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const liveAvailable = capabilities.live_available || capabilities.live_self_service_enabled;
@@ -111,7 +111,7 @@ export function AppShell({ children, footer }: Readonly<{ children: React.ReactN
       )}
 
       <div className="content" key={identityKey}>
-        {sessionLoading ? <PageState /> : mode === "live" && !session?.live_allowed ? <LiveSignIn /> : unavailableConnections ? (
+        {authPending || (mode === "live" && !session?.live_allowed) ? <LiveSignIn /> : sessionLoading ? <PageState /> : unavailableConnections ? (
           <main className="page">
             <h1>{t("mode.publicConnectionsTitle")}</h1>
             <p className="lead">{t("mode.publicConnectionsHint")}</p>

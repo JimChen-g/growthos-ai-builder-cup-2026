@@ -137,3 +137,22 @@ enable advertising writes or add a new Ads OAuth consent flow.
 
 Rebuild the frontend with public Firebase web identifiers. After publishing Cloud Run, publish
 Hosting again because `pinTag` otherwise continues to use the previous API revision.
+
+### Live release verification, 2026-10-17
+
+- Backend source `9c89263` is deployed as `growthos-builder-cup-api-00003-stx`, serving 100%
+  of Cloud Run traffic. Hosting has been published with its API rewrite pinned to this revision.
+- Direct `/health` and Hosting `/api/v1/capabilities` passed. The latter reports
+  `public_demo_only: true`, `live_available: false`, `live_self_service_enabled: true`:
+  shared legacy access stays closed while verified self-service Live is available.
+- Google and Anonymous sign-in show Enabled in Firebase. Secret Manager key version 1 exists;
+  its only direct accessor binding is the dedicated runtime service account. All four new TTL
+  rules show ACTIVE. Max instances 2, concurrency 20 and request timeout 55 seconds are preserved.
+- Anonymous public UI can select Live and navigate Today, Growth and Connections; each presents
+  the localized sign-in gate rather than a generic error or Sample data. Unauthenticated direct
+  Connections requests return 401 with `Cache-Control: private, no-store`.
+- Backend validation: 211 tests passed. Real provider credentials were not migrated or retested.
+- The in-app browser did not display the Google popup during acceptance. Login completion and
+  logged-in Live page acceptance therefore still need a normal-browser user check; this release
+  does not claim a completed Google sign-in or deployed two-account isolation test. The frontend
+  additionally bounds popup waiting and retains visible retry guidance instead of an endless spinner.

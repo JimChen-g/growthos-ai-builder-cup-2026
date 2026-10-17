@@ -7,6 +7,8 @@ import {
 let signInPromise: Promise<User> | null = null;
 let identityEpoch = 0;
 let identityChanging = false;
+let interactiveAttempt = 0;
+const POPUP_WAIT_MS = 45000;
 
 function configuredApp(): FirebaseApp | null {
   const config = {
@@ -39,29 +41,42 @@ export function firebaseIdentityKey(): string | null {
 export async function signInWithGoogle(): Promise<void> {
   const app = configuredApp();
   if (!app) throw new Error("auth/not-configured");
+  // Do not defer opening the popup beyond the click gesture or race an earlier
+  // anonymous sign-in. The UI can retry once that session has settled.
+  if (signInPromise) throw new Error("auth/session-initializing");
+  const attempt = ++interactiveAttempt;
   identityChanging = true;
   identityEpoch += 1;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    // Do not let an earlier anonymous request overwrite the chosen account.
-    await signInPromise?.catch(() => undefined);
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
-    await signInWithPopup(getAuth(app), provider);
+    // Invoke synchronously from the user gesture. Some embedded browsers never
+    // resolve unsupported popups, so waiting must have a visible, bounded exit.
+    const popup = signInWithPopup(getAuth(app), provider);
+    await Promise.race([
+      popup,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("auth/popup-timeout")), POPUP_WAIT_MS);
+      }),
+    ]);
   } finally {
-    identityChanging = false;
+    if (timeout !== undefined) clearTimeout(timeout);
+    if (attempt === interactiveAttempt) identityChanging = false;
   }
 }
 
 export async function signOutFirebase(): Promise<void> {
   const app = configuredApp();
   if (!app) return;
+  const attempt = ++interactiveAttempt;
   identityChanging = true;
   identityEpoch += 1;
   try {
     await signInPromise?.catch(() => undefined);
     await signOut(getAuth(app));
   } finally {
-    identityChanging = false;
+    if (attempt === interactiveAttempt) identityChanging = false;
   }
 }
 
