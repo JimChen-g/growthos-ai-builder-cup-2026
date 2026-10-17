@@ -212,6 +212,7 @@ class FirestoreCompetitionStore:
 
         def reserve() -> bool:
             transaction = self._client.transaction()
+            expires_at = datetime.now(UTC) + timedelta(days=self._retention_days)
 
             @self._firestore.transactional
             def apply(transaction):
@@ -221,10 +222,18 @@ class FirestoreCompetitionStore:
                 session_count = (session_doc.to_dict() or {}).get("count", 0)
                 if global_count >= global_limit or session_count >= session_limit:
                     return False
-                transaction.set(global_ref, {"count": global_count + 1, "day": day})
+                transaction.set(
+                    global_ref,
+                    {"count": global_count + 1, "day": day, "expires_at": expires_at},
+                )
                 transaction.set(
                     session_ref,
-                    {"count": session_count + 1, "day": day, "session_id": session_id},
+                    {
+                        "count": session_count + 1,
+                        "day": day,
+                        "session_id": session_id,
+                        "expires_at": expires_at,
+                    },
                 )
                 return True
 
