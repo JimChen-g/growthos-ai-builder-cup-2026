@@ -1,8 +1,8 @@
 # Competition deployment runbook
 
-This runbook is intentionally not marked complete. Owner-console access, project identity and a
-linked billing account were verified read-only on 2026-10-17. Run mutations only after confirming
-the allowed spend/credits and authenticating the same authorized identity in the deployment CLI.
+The bounded public prototype was deployed with owner authorization on 2026-10-17. Continue to use
+this runbook for updates; confirm the allowed spend before expanding traffic, quotas, regions or
+enabled services.
 
 ## Intended topology
 
@@ -13,8 +13,8 @@ the allowed spend/credits and authenticating the same authorized identity in the
   access (`firestore.rules` denies all client reads/writes).
 - Cloud Run uses service-account ADC to call `gemini-3.7-flash` on Vertex AI.
 
-The configured region `us-central1` is a candidate only until project availability and Hosting
-rewrite compatibility are checked. Do not treat it as deployed evidence.
+The deployed Cloud Run and Firestore region is `us-central1`; Firebase Hosting successfully pins
+its `/api/**` rewrite to the deployed Cloud Run revision.
 
 ## Owner checks before mutation
 
@@ -50,12 +50,29 @@ the verified project ID, Firebase project ID, Firestore database, Vertex locatio
    public URLs in the status document.
 8. Run the public-repository scan again immediately before push.
 
-No cloud resource, public URL or live Vertex request has been asserted by this document.
+## Deployed acceptance on 2026-10-17
 
-## Read-only inventory on 2026-10-17
+- Public judge path: <https://reflected-jet-478308-t5.web.app/builder-cup/>
+- Cloud Run service: `growthos-builder-cup-api`, revision
+  `growthos-builder-cup-api-00001-rjk`, serving 100% of traffic in `us-central1`.
+- `/health` returned `{"status":"ok","phase":"5"}` from the public Cloud Run URL.
+- Firebase Anonymous Auth issued a browser identity accepted by the backend.
+- One end-to-end analysis returned source `live_vertex` and model `gemini-3.7-flash` through the
+  Hosting rewrite.
+- The same browser session approved the first alternative and received `executed`, verifying the
+  Firestore-backed approval and simulated-execution path.
+- Firestore rules deny direct client access. TTL is enabled for the `expires_at` field on the
+  `competition_cache`, `workflows` and `competition_quota` collection groups.
+- Runtime cost bounds are zero minimum instances, two maximum instances, 20 requests per anonymous
+  session per day and 200 analysis requests globally per day.
+
+Two-session isolation, deployed multi-instance races, forced model failure and persistence across a
+new Cloud Run revision remain follow-up acceptance cases; they are not implied by the smoke test.
+
+## Project inventory on 2026-10-17
 
 - The target project and linked billing account are accessible in the owner console.
-- Agent Platform API (Vertex AI) and Cloud Datastore API are enabled.
-- Cloud Run was not present in the enabled-service list inspected for this project.
-- Firebase association, Firestore database creation, Anonymous Auth, Cloud Run service identity,
-  deployment region, quotas and live model access are not yet accepted.
+- Cloud Run, Cloud Build, Artifact Registry, Firestore, Firebase, Firebase Hosting and Identity
+  Toolkit services are enabled alongside Vertex AI.
+- Firebase association, Native-mode Firestore, Anonymous Auth, the dedicated runtime service
+  account and live model access passed the deployed smoke test described above.

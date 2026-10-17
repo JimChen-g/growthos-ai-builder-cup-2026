@@ -5,30 +5,30 @@ Snapshot date: 2026-10-17 (Asia/Shanghai)
 Labels used below:
 
 - **Verified locally**: implemented and exercised in this clean competition repository.
-- **Implemented, cloud acceptance pending**: code/config exists, but the target GCP project has
-  not been authenticated and no live-cloud claim is made.
+- **Deployed smoke verified**: the public path passed the explicitly described end-to-end check;
+  unlisted recovery, concurrency or isolation cases are not implied.
 - **Not run**: requires a deployed public version or human study.
 
 | Item | Status | Evidence / remaining acceptance |
 |---|---|---|
 | DEV-01 | Verified locally | Pinned source `2a2bd210`; allowlisted export; new Git history; original working tree unchanged. |
-| DEV-02 | Partly verified; cloud acceptance pending | Owner console access, project identity and a linked billing account were verified read-only. Region, quotas, deployer/runtime IAM and CLI owner authentication remain unresolved. |
-| DEV-03 | Implemented, cloud acceptance pending | Agent Platform API is enabled and model/region/timeout are configurable; candidate is `gemini-3.7-flash`; a structured call in the target project is still required. |
+| DEV-02 | Deployed smoke verified | Billing-linked project, `us-central1`, enabled services, dedicated runtime identity and minimum runtime IAM were accepted during deployment. |
+| DEV-03 | Deployed smoke verified | A structured `gemini-3.7-flash` Vertex response passed server-side evidence validation through the public path. |
 | DEV-04 | Verified locally | Strict structured contract, stable evidence IDs, server-side citation validation, exactly two actions and labelled fallback tests. |
-| DEV-05 | Verified locally; live call pending | Competition endpoint permits only the bounded analysis path and simulated action; existing real integrations are not exposed by the judge flow. |
-| DEV-06 | Implemented, cloud acceptance pending | Lazy anonymous sign-in and server-side Firebase token verification are implemented; two real browser sessions still need deployed acceptance. |
-| DEV-07 | Implemented, cloud acceptance pending | Firestore and in-memory adapters exist; workflow/cache/quota documents have retention timestamps. Live Firestore recovery remains unverified. |
+| DEV-05 | Deployed smoke verified | The bounded endpoint returned a live Vertex result and the only executable judge action recorded a simulation. |
+| DEV-06 | Partly deployed verified | Lazy anonymous sign-in and server-side token verification passed in one real browser session; two-session isolation remains. |
+| DEV-07 | Partly deployed verified | Firestore created and stored the smoke-test workflow/approval; recovery across a fresh revision remains. |
 | DEV-08 | Verified locally; cloud concurrency pending | Transactional approval claim, idempotent repeat handling and session isolation are tested against the store contract. Firestore multi-instance acceptance remains. |
-| DEV-09 | Verified locally; cloud persistence pending | Cache, per-session/global/day quotas, size bounds and retention fields are tested. Firestore TTL policy must be enabled in the project. |
-| DEV-10 | Verified locally; Hosting timing pending | One bounded Vertex request, 40-second timeout, two transient attempts and explicit source labels. End-to-end Hosting latency is unmeasured. |
-| DEV-11 | Partly verified locally | Clean build context and browser-token scan are complete. Cloud Run API was not present in the read-only enabled-service inventory; runtime service account and IAM are not configured. |
-| DEV-12 | Verified locally | Next.js static export produced ten routes, including `/builder-cup`; same-origin API calls and dynamic ID tokens replace localhost/shared-token defaults. |
-| DEV-13 | Verified locally; cloud acceptance pending | Container builds and starts as a non-root user on `$PORT`; `/health` returned `{"status":"ok","phase":"5"}`. No Cloud Run revision exists yet. |
-| DEV-14 | Not run | Requires authenticated deployment of Hosting, Cloud Run, Firestore, Auth and Vertex. |
+| DEV-09 | Partly deployed verified | Cache, quotas and bounds are tested; TTL is enabled for cache, workflow and quota collection groups. Live quota exhaustion remains. |
+| DEV-10 | Deployed smoke verified | Hosting returned a labelled live Vertex result within the bounded request window. |
+| DEV-11 | Deployed smoke verified | Dedicated runtime account has only Vertex user and Datastore user roles; build context and browser-token scans passed. |
+| DEV-12 | Deployed smoke verified | Ten static routes were exported and `/builder-cup/` plus its same-origin `/api/**` rewrite passed. |
+| DEV-13 | Deployed smoke verified | Cloud Run revision `growthos-builder-cup-api-00001-rjk` serves 100% traffic; public `/health` passed. |
+| DEV-14 | Deployed smoke verified | Hosting, Cloud Run, Firestore, Anonymous Auth and Vertex completed one public analysis and simulated approval. |
 | DEV-15 | Verified locally | English, Simplified Chinese and Traditional Chinese judge path with sample/live/cache/fallback/simulated labels. |
-| DEV-16 | Partly verified locally | 115 backend tests pass; model failure, cache, quota, isolation and concurrent duplicate approval are covered. Deployed auth/recovery/concurrency remain. |
+| DEV-16 | Partly deployed verified | 115 backend tests pass and deployed auth/analysis/approval passed; recovery and concurrency remain. |
 | DEV-17 | Not run | No efficiency percentages or productivity claims are reported. Requires deployed version and three paired repetitions per task. |
-| DEV-18 | In progress | Local candidate and public-safety audit exist. Public URL, cloud revision and deployed acceptance are pending; no deck/video/submission copy was created. |
+| DEV-18 | In progress | Public URL, cloud revision and deployed smoke acceptance are recorded; deck/video/submission copy remains. |
 
 ## Verified commands
 
@@ -38,5 +38,6 @@ Labels used below:
 - `npm audit --omit=dev --audit-level=high`: zero known vulnerabilities at the configured threshold.
 - Local Docker build/start/health request: passed.
 
-These results do not prove Firebase, Firestore, Cloud Run, Hosting or Vertex behavior in the target
-Google Cloud project.
+The deployed smoke test proves the specific Firebase Auth, Hosting, Cloud Run, Firestore and Vertex
+path recorded above. It does not prove the remaining multi-session, recovery, concurrency, quota or
+failure-mode cases.

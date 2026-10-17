@@ -15,9 +15,9 @@ account and the only executable competition action is explicitly simulated. A de
 labelled fallback is returned when Vertex is unavailable; it is never presented as a live model
 result.
 
-Local implementation and verification are complete. Public GitHub publication and the Google
-Cloud deployment are intentionally reported separately because they require authenticated owner
-access and live cloud acceptance. See
+The public prototype is deployed at
+[`https://reflected-jet-478308-t5.web.app/builder-cup/`](https://reflected-jet-478308-t5.web.app/builder-cup/).
+Local verification and the deployed Google Cloud acceptance record are reported separately. See
 [`docs/competition/IMPLEMENTATION_STATUS.md`](docs/competition/IMPLEMENTATION_STATUS.md) and
 [`docs/competition/DEPLOYMENT.md`](docs/competition/DEPLOYMENT.md).
 
