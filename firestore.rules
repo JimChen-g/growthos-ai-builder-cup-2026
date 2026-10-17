@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // The browser never talks to Firestore directly. Cloud Run validates Firebase ID tokens and
+    // uses its least-privilege service account for all state transitions.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -15,6 +15,7 @@ from backend.api.security import (
     approver_identity,
     ensure_live_allowed,
     install_access_control,
+    request_workspace_id,
 )
 from backend.config import Settings
 from backend.models.approval import (
@@ -25,6 +26,11 @@ from backend.models.approval import (
 )
 from backend.models.audit_anchor import AuditBatchProof, AuditIntegrityStatus
 from backend.models.audit_log import AgentActionLedger, AgentActionStatus
+from backend.models.competition import (
+    CompetitionAnalysisRequest,
+    CompetitionDecision,
+    CompetitionDecisionRequest,
+)
 from backend.models.connectors import (
     AccountSelectionRequest,
     ConnectionCenter,
@@ -56,6 +62,11 @@ from backend.services.audit_anchor import (
     load_public_anchor_receipt,
 )
 from backend.services.audit_log import AuditLogService
+from backend.services.competition_decision import (
+    CompetitionDecisionService,
+    CompetitionQuotaExceededError,
+    build_competition_decision_service,
+)
 from backend.services.connector_security import CredentialVaultError, VaultUnavailableError
 from backend.services.demo import load_demo_script
 from backend.services.founder_experience import (
@@ -109,6 +120,7 @@ def create_app(
     real_intelligence: RealIntelligenceRuntime | None = None,
     live_audit_log: AuditLogService | None = None,
     demo_script: DemoScript | None = None,
+    competition_decisions: CompetitionDecisionService | None = None,
     settings: Settings | None = None,
 ) -> FastAPI:
     """Create an application with injectable runtime state for tests and deployment."""
@@ -128,11 +140,15 @@ def create_app(
             app.state.live_audit_log = AuditLogService(mode=DataMode.LIVE)
         if not hasattr(app.state, "demo_script"):
             app.state.demo_script = load_demo_script(Settings().phase5_demo_fixture_path)
+        if not hasattr(app.state, "competition_decisions"):
+            app.state.competition_decisions = build_competition_decision_service(
+                app.state.settings
+            )
         yield
 
     app = FastAPI(
         title="AI Growth Agent API",
-        version="0.5.0",
+        version="0.6.0",
         description="Approval-gated growth orchestration with a fixed three-minute demo",
         lifespan=lifespan,
     )
@@ -146,6 +162,8 @@ def create_app(
         app.state.live_audit_log = live_audit_log
     if demo_script is not None:
         app.state.demo_script = demo_script
+    if competition_decisions is not None:
+        app.state.competition_decisions = competition_decisions
     app_settings = settings or Settings()
     app.state.settings = app_settings
 
@@ -207,6 +225,13 @@ def create_app(
             request.app.state.demo_script = load_demo_script(Settings().phase5_demo_fixture_path)
         return request.app.state.demo_script
 
+    def active_competition_decisions(request: Request) -> CompetitionDecisionService:
+        if not hasattr(request.app.state, "competition_decisions"):
+            request.app.state.competition_decisions = build_competition_decision_service(
+                request.app.state.settings
+            )
+        return request.app.state.competition_decisions
+
     def active_intelligence_history(request: Request, mode: DataMode) -> IntelligenceHistoryService:
         state_name = f"{mode.value}_intelligence_history"
         if not hasattr(request.app.state, state_name):
@@ -227,6 +252,64 @@ def create_app(
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok", "phase": "5"}
+
+    @app.post(
+        "/api/v1/competition/analyze",
+        response_model=CompetitionDecision,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def competition_analyze(
+        request: Request,
+        body: CompetitionAnalysisRequest,
+    ) -> CompetitionDecision:
+        try:
+            return await active_competition_decisions(request).analyze(
+                request_workspace_id(request),
+                body,
+            )
+        except CompetitionQuotaExceededError as error:
+            raise HTTPException(status_code=429, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get(
+        "/api/v1/competition/workflows/{workflow_id}",
+        response_model=CompetitionDecision,
+    )
+    async def competition_workflow(
+        request: Request,
+        workflow_id: Annotated[str, Path(min_length=1, max_length=64)],
+    ) -> CompetitionDecision:
+        try:
+            return await active_competition_decisions(request).get(
+                request_workspace_id(request),
+                workflow_id,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.post(
+        "/api/v1/competition/workflows/{workflow_id}/decision",
+        response_model=CompetitionDecision,
+    )
+    async def competition_workflow_decision(
+        request: Request,
+        body: CompetitionDecisionRequest,
+        workflow_id: Annotated[str, Path(min_length=1, max_length=64)],
+    ) -> CompetitionDecision:
+        try:
+            return await active_competition_decisions(request).decide(
+                request_workspace_id(request),
+                workflow_id,
+                outcome=body.outcome,
+                action_digest=body.action_digest,
+                actor=approver_identity(request, request.app.state.settings, "founder"),
+                reason=body.reason,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.get("/api/v1/demo", response_model=DemoScript)
     async def fixed_demo_script(request: Request) -> DemoScript:

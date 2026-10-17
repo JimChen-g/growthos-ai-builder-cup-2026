@@ -1,6 +1,6 @@
 # Public repository publication audit
 
-Status: in progress
+Status: local candidate scanned; remote publication pending authenticated GitHub access
 
 ## Export boundary
 
@@ -29,3 +29,19 @@ Status: in progress
 
 The GitHub account and public repository URL identify the account owner on GitHub. Removing names
 from files cannot make that platform-level identity anonymous.
+
+## 2026-10-17 local results
+
+- Repository history starts with a new root commit; the private source remote and history are not
+  present.
+- Local commit identity is `GrowthOS Builder Cup <growthos-builder-cup@users.noreply.github.com>`.
+- Baseline and competition tests pass; static frontend export and the local container health check
+  pass.
+- Production frontend dependency audit reports zero vulnerabilities at high/critical threshold.
+- No shared server token is used by the frontend. Firebase ID tokens are obtained per anonymous
+  session and sent dynamically.
+- The complete staged candidate and generated frontend bundle were scanned after documentation
+  changes. No common credential pattern, personal email, original private-repository identifier,
+  shared frontend token or loopback API address was found. Empty `.env.example` keys and one
+  synthetic unit-test secret remain intentionally. Repeat this scan immediately before any later
+  public push if the candidate changes.

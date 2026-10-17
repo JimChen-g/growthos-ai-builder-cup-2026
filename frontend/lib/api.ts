@@ -1,11 +1,45 @@
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
-// Optional shared token for private deployments. It ships in the browser bundle, so it is a
-// gate, not a secret: public demos should also run the API with PUBLIC_DEMO_ONLY=true.
-const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN;
+import { getFirebaseIdToken } from "./firebase";
+
+// Public hosting uses same-origin /api rewrites. Local development can opt into an explicit URL.
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 export type NumberValue = number | string;
 
 export type DataMode = "demo" | "live";
+
+export type CompetitionEvidence = {
+  evidence_id: string;
+  label: string;
+  value: string;
+  source: string;
+  observed_at: string | null;
+};
+
+export type CompetitionAction = {
+  title: string;
+  rationale: string;
+  evidence_ids: string[];
+  observation_metric: string;
+  execution_kind: "simulated_campaign" | "manual_recommendation";
+};
+
+export type CompetitionDecision = {
+  workflow_id: string;
+  priority_problem: string;
+  priority_reason: string;
+  priority_evidence_ids: string[];
+  alternatives: [CompetitionAction, CompetitionAction];
+  missing_information: string[];
+  evidence: CompetitionEvidence[];
+  source: "live_vertex" | "cache" | "deterministic_fallback";
+  model_id: string | null;
+  cached: boolean;
+  generated_at: string;
+  approval_status: "pending" | "executing" | "executed" | "rejected" | "failed";
+  action_digest: string;
+  execution_result: { kind: string; status: string; message: string } | null;
+  failure_message: string | null;
+};
 
 export type DataProvenance = {
   mode: DataMode;
@@ -404,12 +438,12 @@ export async function getJson<T>(path: string): Promise<T> {
 }
 
 export async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const identityToken = await getFirebaseIdToken();
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      "X-Tenant-ID": "local-demo",
-      ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
+      ...(identityToken ? { Authorization: `Bearer ${identityToken}` } : {}),
       ...init.headers,
     },
   });

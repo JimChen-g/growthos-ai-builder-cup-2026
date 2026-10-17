@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     api_principal_name: str = "founder"
     # Hosted judge/demo deployments: serve the Demo workspace only, refuse Live routes.
     public_demo_only: bool = False
+    # Competition deployments use Firebase anonymous authentication. The backend derives the
+    # workspace from the verified Firebase uid and never trusts a client-supplied tenant header.
+    firebase_project_id: str | None = None
+    firebase_auth_required: bool = False
     cors_allow_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     data_source_mode: Literal["demo", "live"] = "demo"
     demo_fixture_path: Path = Path("data/demo_ai_customer_support.json")
@@ -84,8 +88,19 @@ class Settings(BaseSettings):
     vertex_ai_project_id: str | None = None
     vertex_ai_location: str = "global"
     vertex_ai_api_key: SecretStr | None = None
-    vertex_ai_model: str = "gemini-2.5-flash"
+    # Gemini 2.5 Flash reached its published retirement date on 2026-10-16. The competition
+    # candidate is a currently GA global model; deployment still requires a real project call.
+    vertex_ai_model: str = "gemini-3.7-flash"
     vertex_ai_api_base_url: str = "https://aiplatform.googleapis.com"
+    vertex_ai_request_timeout_seconds: float = Field(default=40.0, gt=0, le=55)
+
+    competition_mode: bool = False
+    firestore_database: str = "(default)"
+    competition_session_daily_limit: int = Field(default=20, ge=1, le=1000)
+    competition_global_daily_limit: int = Field(default=500, ge=1, le=100000)
+    competition_max_evidence_items: int = Field(default=30, ge=2, le=100)
+    competition_cache_ttl_seconds: int = Field(default=86400, ge=60, le=604800)
+    competition_data_retention_days: int = Field(default=7, ge=1, le=30)
 
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-5.6-luna"

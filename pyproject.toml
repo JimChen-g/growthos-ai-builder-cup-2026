@@ -11,6 +11,7 @@ dependencies = [
   "cryptography>=50,<60",
   "fastapi>=0.116,<1",
   "google-auth>=2.40,<3",
+  "google-cloud-firestore>=2.21,<3",
   "httpx>=0.28,<1",
   "langgraph>=1.2.8,<2",
   "pydantic>=2.11,<3",

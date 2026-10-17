@@ -10,12 +10,17 @@ Two independent guards:
   demo can never read connected accounts or spend provider quota.
 """
 
+import hashlib
 import hmac
 import logging
+from asyncio import to_thread
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response
+from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2 import id_token
 
 from backend.config import Settings
 
@@ -26,6 +31,7 @@ _PUBLIC_PATHS = {"/health"}
 _LIVE_ONLY_PREFIXES = ("/api/v1/connections", "/api/v1/growth-intelligence")
 LOCAL_PRINCIPAL = "local"
 TOKEN_PRINCIPAL = "token"
+FIREBASE_PRINCIPAL = "firebase"
 
 
 def _bearer_token(request: Request) -> str | None:
@@ -40,6 +46,23 @@ def _is_direct_loopback(request: Request) -> bool:
     return client_host in _LOOPBACK_HOSTS and not proxied
 
 
+def workspace_id_for_uid(uid: str) -> str:
+    """Derive a non-reversible public-demo workspace identifier from a verified Firebase uid."""
+
+    return hashlib.sha256(f"growthos-public-demo:{uid}".encode()).hexdigest()[:32]
+
+
+def _verify_firebase_token(token: str, project_id: str) -> dict[str, Any]:
+    claims = id_token.verify_firebase_token(
+        token,
+        GoogleAuthRequest(),
+        audience=project_id,
+    )
+    if not claims or not isinstance(claims.get("sub"), str) or not claims["sub"]:
+        raise ValueError("Firebase token has no subject")
+    return claims
+
+
 def install_access_control(app: FastAPI, settings: Settings) -> None:
     """Register the access-control middleware. Call before adding CORS middleware."""
 
@@ -52,7 +75,32 @@ def install_access_control(app: FastAPI, settings: Settings) -> None:
         if request.method == "OPTIONS" or path in _PUBLIC_PATHS or not path.startswith("/api"):
             return await call_next(request)
 
-        if expected:
+        if settings.firebase_auth_required:
+            supplied = _bearer_token(request)
+            if not supplied or not settings.firebase_project_id:
+                return JSONResponse(
+                    {"detail": "A Firebase identity token is required."},
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            try:
+                claims = await to_thread(
+                    _verify_firebase_token,
+                    supplied,
+                    settings.firebase_project_id,
+                )
+            except Exception:  # noqa: BLE001 - never expose token verification detail
+                logger.info("Rejected an invalid or expired Firebase identity token")
+                return JSONResponse(
+                    {"detail": "The Firebase identity token is invalid or expired."},
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            uid = str(claims["sub"])
+            request.state.principal = FIREBASE_PRINCIPAL
+            request.state.firebase_uid = uid
+            request.state.workspace_id = workspace_id_for_uid(uid)
+        elif expected:
             supplied = _bearer_token(request)
             if not supplied or not hmac.compare_digest(supplied, expected):
                 return JSONResponse(
@@ -101,6 +149,14 @@ def approver_identity(request: Request, settings: Settings, claimed_actor: str) 
     """Record who approved: the authenticated principal, never only a client-typed name."""
 
     principal = getattr(request.state, "principal", LOCAL_PRINCIPAL)
+    if principal == FIREBASE_PRINCIPAL:
+        return f"anonymous:{request.state.workspace_id[:12]}"
     if principal == TOKEN_PRINCIPAL:
         return f"{settings.api_principal_name} (API token)"
     return f"{claimed_actor} (local)"
+
+
+def request_workspace_id(request: Request) -> str:
+    """Return only a server-derived workspace id for competition routes."""
+
+    return getattr(request.state, "workspace_id", "local-demo")

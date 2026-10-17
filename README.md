@@ -2,6 +2,38 @@
 
 > Approval-gated AI growth orchestration for a Gemini-powered growth operating system.
 
+## AI Builder Cup 2026 prototype
+
+This public-safe competition copy targets **Future of Work & Enterprise Productivity**. Its
+judge path is available at `/builder-cup` and demonstrates:
+
+`sample SaaS evidence → Vertex decision → two evidence-linked actions → human approval → simulated execution record`
+
+The competition path uses Firebase anonymous identity, a server-derived workspace, Firestore
+workflow/quota/cache storage, and Gemini on Vertex AI. It never connects a judge to a real ad
+account and the only executable competition action is explicitly simulated. A deterministic,
+labelled fallback is returned when Vertex is unavailable; it is never presented as a live model
+result.
+
+Local implementation and verification are complete. Public GitHub publication and the Google
+Cloud deployment are intentionally reported separately because they require authenticated owner
+access and live cloud acceptance. See
+[`docs/competition/IMPLEMENTATION_STATUS.md`](docs/competition/IMPLEMENTATION_STATUS.md) and
+[`docs/competition/DEPLOYMENT.md`](docs/competition/DEPLOYMENT.md).
+
+### Competition quick start
+
+```bash
+uv sync --locked --extra dev
+uv run uvicorn backend.api.app:app --host 127.0.0.1 --port 8000
+npm --prefix frontend ci
+npm --prefix frontend run dev
+```
+
+Copy the two `.env.example` files to local untracked environment files and supply only your own
+Firebase web configuration and GCP project settings. No API key is required for the Vertex path;
+the backend uses Application Default Credentials or its Cloud Run service account.
+
 ## Status
 
 Phase 5 adds a fixed AI Customer Support Startup case and a polished, presenter-controlled

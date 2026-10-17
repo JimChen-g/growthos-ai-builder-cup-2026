@@ -29,8 +29,9 @@ Run on 2026-10-17 from this exported repository before the first commit:
 
 - `pytest -q`: **109 passed** in 7.61 seconds.
 - `ruff check .`: **passed**.
-- Frontend install, typecheck and build: not yet rerun for this export.
+- Frontend install, typecheck and build: passed after the competition implementation; ten static
+  routes were exported.
 
-These results cover the imported baseline only. They do not verify the competition changes,
-cloud services, deployment, Firebase authentication, Firestore persistence, or a live Vertex AI
-request.
+The baseline results above cover the imported baseline only. Current implementation results are
+recorded in `IMPLEMENTATION_STATUS.md`; they do not verify cloud services, deployment, Firebase
+authentication, Firestore persistence, or a live Vertex AI request.

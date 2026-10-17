@@ -9,6 +9,7 @@ import { useDataMode, WorkspaceModeSwitch } from "./DataModeContext";
 import { LanguageSwitch } from "./LanguageSwitch";
 
 const navigation: Array<{ href: string; label: MessageKey; liveOnly?: boolean }> = [
+  { href: "/builder-cup", label: "nav.builderCup" },
   { href: "/", label: "nav.today" },
   { href: "/dashboard", label: "nav.growth" },
   { href: "/agent", label: "nav.actions" },
