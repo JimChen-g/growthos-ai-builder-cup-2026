@@ -406,9 +406,11 @@ def test_hosted_live_requires_durable_encrypted_store(tmp_path):
 async def test_geo_deadline_returns_partial_results_and_cancels_pending_calls():
     closed = []
     cancelled = []
+    asked = []
 
     class Provider:
         async def ask(self, prompt):
+            asked.append(prompt)
             if prompt == "Return the successful response":
                 return ProviderAnswer(answer="Acme is listed.", citations=[])
             try:
@@ -423,8 +425,9 @@ async def test_geo_deadline_returns_partial_results_and_cancels_pending_calls():
         async def build(self, tenant_id, provider):
             return Provider()
 
+    quota = TenantQuotaLimiter(50)
     runner = GeoPromptRunner(
-        Factory(), TenantQuotaLimiter(50), request_timeout_seconds=1, total_timeout_seconds=0.04
+        Factory(), quota, request_timeout_seconds=1, total_timeout_seconds=0.04
     )
     request = GeoScanRequest(
         brand="Acme",
@@ -445,7 +448,10 @@ async def test_geo_deadline_returns_partial_results_and_cancels_pending_calls():
     assert report.providers[0].successful_prompts == 1
     assert report.results[0].answer == "Acme is listed."
     assert all(item.error and not item.answer for item in report.results[1:])
-    assert len(cancelled) == 2 and closed == [True]
+    assert cancelled == [request.prompts[1]] and closed == [True]
+    assert asked == request.prompts[:2]
+    # The queued serialized prompt never started and must not consume quota.
+    assert await quota.used("judge-a", ConnectorProvider.PERPLEXITY) == 2
 
 
 @pytest.mark.asyncio
@@ -491,6 +497,9 @@ async def test_geo_concurrency_is_bounded_across_providers_and_keeps_order():
     report = await runner.scan("judge-a", request)
     assert maximum == 6
     assert max(provider_peak.values()) <= 3
+    assert provider_peak[ConnectorProvider.PERPLEXITY] == 1
+    assert provider_peak[ConnectorProvider.OPENAI] == 3
+    assert provider_peak[ConnectorProvider.GEMINI] == 3
     assert all(item.status == "completed" for item in report.providers)
     assert [item.prompt for item in report.results] == request.prompts * len(request.providers)
 

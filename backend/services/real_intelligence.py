@@ -1148,7 +1148,12 @@ class GeoPromptRunner:
         timeout_message = "The provider request timed out. Retry the unavailable prompts."
         results = [_error_result(provider, prompt, timeout_message) for prompt in request.prompts]
         client = None
-        provider_slots = asyncio.Semaphore(3)
+        # Perplexity can reject a burst on a single workspace key even when a
+        # one-call connection check succeeds. Serialize its prompts without
+        # retries or extra quota; other providers retain bounded parallel reads.
+        provider_slots = asyncio.Semaphore(
+            1 if provider is ConnectorProvider.PERPLEXITY else 3
+        )
 
         async def run_prompt(index: int, prompt: str) -> None:
             started = monotonic()

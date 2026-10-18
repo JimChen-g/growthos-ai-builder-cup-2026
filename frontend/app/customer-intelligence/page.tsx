@@ -39,10 +39,11 @@ export default function CustomersPage() {
   );
 }
 
-function Insight({ analysis, commentsTitle, localizeSample = false }: {
+function Insight({ analysis, commentsTitle, localizeSample = false, liveResults = false }: {
   analysis: FeedbackAnalysis;
   commentsTitle: string;
   localizeSample?: boolean;
+  liveResults?: boolean;
 }) {
   const { t, tx } = useI18n();
   return (
@@ -70,7 +71,7 @@ function Insight({ analysis, commentsTitle, localizeSample = false }: {
       <section className="section">
         <div className="section-head">
           <h2>{commentsTitle}</h2>
-          <span className="muted">{t("customers.signals", { n: analysis.sample_count })}</span>
+          <span className="muted">{t(liveResults ? "customers.searchResults" : "customers.signals", { n: analysis.sample_count })}</span>
         </div>
         <ul className="quotes">
           {analysis.analyzed_signals.map((item, index) => (
@@ -125,6 +126,7 @@ function LiveCustomers() {
     <main className="page">
       <h1>{t("customers.title")}</h1>
       <p className="lead">{t("customers.subtitle")}</p>
+      <p className="note warn">{t("customers.liveSearchCaveat")}</p>
       <form
         className="inline-form"
         onSubmit={(event) => {
@@ -153,16 +155,16 @@ function LiveCustomers() {
                 <span className={`dot ${source.status === "completed" ? "ok" : "warn"}`} aria-hidden="true" />
                 <div className="row-main">
                   <strong>{source.provider === "x" ? "X" : "Reddit"}</strong>
-                  <small>{tx(source.collection_method)} · {t("customers.signals", { n: source.signal_count })}</small>
+                  <small>{tx(source.collection_method)} · {t("customers.searchResults", { n: source.signal_count })}</small>
                   {source.error && <p>{t("live.sourceError")}</p>}
                 </div>
               </li>
             ))}
           </ul>
           {collection.analysis ? (
-            <Insight analysis={collection.analysis} commentsTitle={t("customers.liveComments")} />
+            <Insight analysis={collection.analysis} commentsTitle={t("customers.liveComments")} liveResults />
           ) : (
-            <p className="muted">{t("customers.none")}</p>
+            <p className="muted">{t("customers.liveNone")}</p>
           )}
         </section>
       )}

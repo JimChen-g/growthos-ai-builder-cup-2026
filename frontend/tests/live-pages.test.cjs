@@ -15,7 +15,7 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(frontend, "lib/r
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText, { exports: reporting, Intl, Date });
 
-function harness(file, name, initial = [], api = {}, language = "en") {
+function harness(file, name, initial = [], api = {}, language = "en", mode = "live") {
   const state = initial.slice();
   const effects = [];
   let cursor = 0;
@@ -41,7 +41,7 @@ function harness(file, name, initial = [], api = {}, language = "en") {
       };
       if (id === "next/link") return { default: "a" };
       if (id.endsWith("/i18n")) return { useI18n: () => ({ t, tx: (v) => serverMessages[v] ?? v, locale: language === "en" ? "en-US" : language, lang: language }) };
-      if (id.endsWith("/DataModeContext")) return { useDataMode: () => ({ mode: "live", identity: { email: "judge@example.test" }, session: { workspace_id: "0123456789abcdef0123456789abcdef" }, capabilities: { public_demo_only: true, live_self_service_enabled: true } }) };
+      if (id.endsWith("/DataModeContext")) return { useDataMode: () => ({ mode, identity: { email: "judge@example.test" }, session: { workspace_id: "0123456789abcdef0123456789abcdef" }, capabilities: { public_demo_only: true, live_self_service_enabled: true } }) };
       if (id.endsWith("/reporting")) return reporting;
       if (id.endsWith("/api")) return { asNumber: Number, ApiError, ...api };
       if (id.endsWith("/PageState")) return { PageState: "page-state" };
@@ -320,6 +320,105 @@ test("Visibility requests exactly one Gemini source using the established config
     submit(h.render()); await tick();
     assert.deepEqual(body.providers, expected);
     assert.equal(body.mode, "live");
+  }
+});
+
+const partialVisibilityReport = (error) => ({
+  brand: "Test brand", overall_visibility_score: 50,
+  providers: [{ provider: "perplexity", successful_prompts: 1, attempted_prompts: 2, brand_mentions: 1, visibility_score: 50 }],
+  results: [
+    { provider: "perplexity", prompt: "Successful prompt", answer: "Successful answer stays visible.", error: null, citations: [{ title: "Verified source", url: "https://example.test/source" }] },
+    { provider: "perplexity", prompt: "Unavailable prompt", answer: "private-diagnostic-answer-must-not-render", error, citations: [] },
+  ],
+});
+
+test("Visibility translates allowlisted usage limits, timeout and credential errors while preserving partial coverage", () => {
+  const allowed = harness("app/visibility/page.tsx", "SAFE_VISIBILITY_ERRORS").value;
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    const translations = language === "en" ? {} : require(path.join(frontend, `lib/i18n/server.${language}.json`)).exact;
+    for (const error of allowed) {
+      const report = partialVisibilityReport(error);
+      const h = harness("app/visibility/page.tsx", "LiveVisibility", [{ connections: aiConnections(["perplexity"]) }, null, "", "", "", "", report, false, ""], {}, language);
+      const rendered = text(h.render());
+      if (language !== "en") assert.ok(translations[error], `${language}: ${error}`);
+      assert.ok(rendered.includes(translations[error] ?? error));
+      assert.ok(!rendered.includes(h.messages["live.sourceError"]));
+      assert.ok(rendered.includes(h.messages["visibility.coverage"].replace("{n}", "1").replace("{total}", "2")));
+      assert.ok(rendered.includes("Successful answer stays visible."));
+      assert.ok(rendered.includes("Verified source"));
+      assert.ok(!rendered.includes("private-diagnostic-answer-must-not-render"));
+      assert.equal(h.state[6], report, "error presentation must not replace successful measurements");
+    }
+  }
+});
+
+test("Visibility never renders unknown raw error strings, including sensitive text appended to known messages", () => {
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    for (const error of [
+      "Authorization: Bearer private-test-token; https://provider.invalid?key=private-test-key",
+      "The provider's usage limit was reached. Try again later. private-test-secret",
+      "The provider request timed out. Retry the unavailable prompts. private-test-secret",
+      "__proto__",
+    ]) {
+      const h = harness("app/visibility/page.tsx", "LiveVisibility", [{ connections: aiConnections(["perplexity"]) }, null, "", "", "", "", partialVisibilityReport(error), false, ""], {}, language);
+      const rendered = text(h.render());
+      assert.ok(rendered.includes(h.messages["live.sourceError"]));
+      assert.ok(!rendered.includes(error));
+      assert.doesNotMatch(rendered, /private-test-|private-diagnostic-answer/);
+      assert.ok(rendered.includes("Successful answer stays visible."));
+    }
+  }
+});
+
+const keywordAnalysis = {
+  sample_count: 20, sentiment_score: 50, overall_sentiment: "neutral", positive_pct: 0,
+  main_problem: "A keyword match needs review", recommendation: "Review the matched content",
+  analyzed_signals: [{ source: "x", text: "Public keyword match", sentiment: "neutral", topics: [] }],
+};
+
+test("Live Customers labels public keyword matches honestly in every language without altering analysis", () => {
+  const collection = {
+    sources: ["x", "reddit"].map((provider) => ({ provider, status: "completed", signal_count: 10, collection_method: "Public keyword search", error: null })),
+    analysis: keywordAnalysis,
+  };
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    const h = harness("app/customer-intelligence/page.tsx", "LiveCustomers", ["Intercom", collection, null, false, ""], {}, language);
+    const view = h.render();
+    assert.ok(text(view).includes(h.messages["customers.liveSearchCaveat"]));
+    assert.ok(text(view).includes(h.messages["customers.searchResults"].replace("{n}", "10")));
+    assert.ok(!text(view).includes(h.messages["customers.signals"].replace("{n}", "10")));
+    const insight = nodes(view).find((n) => n?.type?.name === "Insight");
+    assert.equal(insight.props.commentsTitle, h.messages["customers.liveComments"]);
+    assert.equal(insight.props.liveResults, true);
+    assert.equal(insight.props.analysis, keywordAnalysis);
+    const detail = harness("app/customer-intelligence/page.tsx", "Insight", [], {}, language);
+    const rendered = text(detail.render(insight.props));
+    assert.ok(rendered.includes(h.messages["customers.liveComments"]));
+    assert.ok(rendered.includes(h.messages["customers.searchResults"].replace("{n}", "20")));
+    assert.ok(!rendered.includes(h.messages["customers.signals"].replace("{n}", "20")));
+    assert.ok(rendered.includes(keywordAnalysis.analyzed_signals[0].text));
+    assert.equal(h.state[1], collection);
+    const empty = harness("app/customer-intelligence/page.tsx", "LiveCustomers", ["Intercom", { sources: [], analysis: null }, null, false, ""], {}, language);
+    assert.ok(text(empty.render()).includes(h.messages["customers.liveNone"]));
+    const beforeSearch = harness("app/customer-intelligence/page.tsx", "LiveCustomers", [], {}, language);
+    assert.ok(text(beforeSearch.render()).includes(h.messages["customers.liveSearchCaveat"]));
+  }
+});
+
+test("Sample Customers retains sample-comment wording and counts without the Live keyword caveat", () => {
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    const h = harness("app/customer-intelligence/page.tsx", "CustomersPage", [keywordAnalysis, false], {}, language, "demo");
+    const view = h.render();
+    assert.ok(!text(view).includes(h.messages["customers.liveSearchCaveat"]));
+    const insight = nodes(view).find((n) => n?.type?.name === "Insight");
+    assert.equal(insight.props.localizeSample, true);
+    assert.equal(insight.props.liveResults, undefined);
+    assert.equal(insight.props.commentsTitle, h.messages["customers.comments"]);
+    const detail = harness("app/customer-intelligence/page.tsx", "Insight", [], {}, language);
+    const rendered = text(detail.render(insight.props));
+    assert.ok(rendered.includes(h.messages["customers.comments"]));
+    assert.ok(rendered.includes(h.messages["customers.signals"].replace("{n}", "20")));
+    assert.ok(!rendered.includes(h.messages["customers.searchResults"].replace("{n}", "20")));
   }
 });
 

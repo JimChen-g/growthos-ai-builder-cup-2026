@@ -24,6 +24,17 @@ const providerNames: Partial<Record<ConnectorProvider, string>> = {
   perplexity: "Perplexity",
 };
 
+// Only server-owned, exact error messages may reach the translation fallback.
+// Unknown provider text can contain request details or credentials and stays generic.
+const SAFE_VISIBILITY_ERRORS = new Set([
+  "Daily provider usage limit reached. Try again tomorrow.",
+  "The provider's usage limit was reached. Try again later.",
+  "The provider request timed out. Retry the unavailable prompts.",
+  "The provider rejected this connection. Check your credentials and account access.",
+  "The provider request could not be completed. Check the connection and try again.",
+  "No credential is configured for live mode.",
+]);
+
 export default function VisibilityPage() {
   const { mode, capabilities } = useDataMode();
   const { t, tx } = useI18n();
@@ -199,7 +210,9 @@ function LiveVisibility() {
                 <li key={`${result.provider}-${index}`}>
                   <strong>{result.prompt}</strong>
                   <small>{providerNames[result.provider]}</small>
-                  <p>{result.error ? t("live.sourceError") : result.answer}</p>
+                  <p>{result.error
+                    ? SAFE_VISIBILITY_ERRORS.has(result.error) ? tx(result.error) : t("live.sourceError")
+                    : result.answer}</p>
                   {result.citations.length > 0 && (
                     <ul className="plain" aria-label={t("visibility.citations")}>
                       {result.citations.map((citation) => (
