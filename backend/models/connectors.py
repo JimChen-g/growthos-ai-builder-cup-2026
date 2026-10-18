@@ -191,7 +191,9 @@ class GoogleAdsConnectionRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    developer_token: SecretStr
+    # Kept for old saved connections. Google sunset this credential on 2026-09-09;
+    # authorization now follows the Cloud project that owns the OAuth credentials.
+    developer_token: SecretStr | None = None
     customer_id: str = Field(min_length=1, max_length=32, pattern=r"^[\d-]+$")
     login_customer_id: str | None = Field(default=None, pattern=r"^[\d-]+$")
     access_token: SecretStr | None = None
@@ -199,6 +201,12 @@ class GoogleAdsConnectionRequest(BaseModel):
     client_secret: SecretStr | None = None
     refresh_token: SecretStr | None = None
     currency: str = "USD"
+
+    @field_validator("developer_token", mode="before")
+    @classmethod
+    def empty_legacy_token_is_none(cls, value: object) -> object:
+        raw = value.get_secret_value() if isinstance(value, SecretStr) else value
+        return None if isinstance(raw, str) and not raw.strip() else value
 
     @field_validator("currency")
     @classmethod

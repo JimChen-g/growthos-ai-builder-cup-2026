@@ -124,8 +124,12 @@ enable advertising writes or add a new Ads OAuth consent flow.
 - Verified Firebase UID determines private workspace ownership server-side. Requests cannot choose
   a workspace through tenant headers or body values. Browser access to Firestore remains denied.
 - Judges use Google sign-in, switch to Live, then fill their own credentials under Connections.
-  Stripe needs a restricted key. Google Ads needs a developer token, customer ID and an access
-  token or complete OAuth refresh credentials. Meta needs its token/account configuration.
+  Stripe needs a restricted key. Google Ads needs a customer ID and an access token or complete
+  OAuth refresh credentials. Developer Token is optional legacy input and is no longer sent;
+  since 2026-09-09, API access belongs to the Cloud project that owns the OAuth credentials
+  (not necessarily this Hosting project). Check that project's Google Ads API access level for
+  production accounts. The custom REST client now defaults to API v26; there is no `google-ads`
+  SDK dependency. Meta needs its token/account configuration.
   Perplexity/Reddit and X use the existing individual provider configuration forms.
 - Provider tests are independent. The original aggregate Growth report requires Stripe, Google
   Ads and Meta Ads together; its market/execution scoring defaults are disclosed assumptions.
@@ -238,3 +242,23 @@ This release does not claim complete three-source production reconciliation. Pri
 results and credentials are intentionally excluded from this public deployment record. A current
 provider token, suitable permissions and matching platform-side reporting conditions are still
 required for real-data acceptance. No advertising writes were invoked during acceptance.
+
+### Google Ads project-based access migration, 2026-10-18
+
+- Google's [developer token sunset guide](https://developers.google.com/google-ads/api/docs/api-policy/developer-token)
+  confirms that Developer Token became optional and ignored on 2026-09-09. API access follows
+  the Cloud project owning the OAuth credentials; GrowthOS sign-in is not Google Ads OAuth.
+- Connections now accepts an omitted, null or blank legacy token. Existing encrypted records
+  still parse, but the REST adapter never sends `developer-token`, including for old records.
+  OAuth authentication, account permissions, private workspace isolation and encryption remain
+  required. No existing saved credentials need to be rewritten for this change.
+- The custom HTTPX REST client and environment example default to Google Ads API v26, released
+  2026-10-14 according to the [official release notes](https://developers.google.com/google-ads/api/docs/release-notes).
+  This repository does not use the `google-ads` SDK. v26's listed breaking changes do not affect
+  the customer metadata or campaign reporting fields used by this adapter.
+- English, Simplified Chinese and Traditional Chinese explain the optional field and Cloud
+  project authorization. Both direct access tokens and complete OAuth refresh configurations
+  are covered by offline read-only tests without a Developer Token.
+- Release checks: 386 backend tests, 51 frontend tests, Ruff, TypeScript and production build.
+  These tests do not establish current real-provider credential validity; expired OAuth access
+  tokens still require renewal by their owner. No advertising mutations are used in acceptance.

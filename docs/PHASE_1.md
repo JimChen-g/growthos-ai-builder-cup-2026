@@ -112,10 +112,10 @@ Data Source: demo
 | `STRIPE_CURRENCY` | Stripe | Defaults to `usd`; other currencies are excluded from the snapshot |
 | `STRIPE_API_BASE_URL` | Stripe | Defaults to Stripe's API host |
 | `GOOGLE_ADS_ACCESS_TOKEN` | Live Google Ads read | Phase 1 accepts a current OAuth access token; refresh orchestration is deferred |
-| `GOOGLE_ADS_DEVELOPER_TOKEN` | Live Google Ads read | Sent in the provider-required request header |
+| `GOOGLE_ADS_DEVELOPER_TOKEN` | Legacy compatibility only | Optional and no longer sent after Google's 2026-09-09 sunset |
 | `GOOGLE_ADS_CUSTOMER_ID` | Live Google Ads read | Hyphens are normalized away |
 | `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | Manager-account read | Optional |
-| `GOOGLE_ADS_API_VERSION` | Google Ads | Defaults to `v25`, verified for this Phase 1 build on 2026-08-09 |
+| `GOOGLE_ADS_API_VERSION` | Google Ads | Defaults to `v26` (released 2026-10-14); custom REST client, not the Google Ads SDK |
 | `GOOGLE_ADS_CURRENCY` | Google Ads | Defaults to `USD`; set it to the ad account's billing currency |
 | `GOOGLE_ADS_TARGET_ROAS` | Google Ads score | Defaults to `3.0` |
 | `GOOGLE_ADS_TARGET_CAC` | Google Ads diagnosis | Optional; enables the `High CAC` flag |
@@ -168,4 +168,4 @@ Latest local verification on 2026-08-11:
 | `.venv/bin/python -m pip check` | Passed — no broken requirements |
 | `git diff --check` | Passed — no whitespace errors |
 
-The provider tests use mocked API responses and exercise normalization without secrets or network access. Stripe, Google Ads, and Meta Ads have all passed read-only live acceptance. Production Google Ads accounts still require an appropriate Developer Token access level; the Phase 1 test integration uses a separate Google Ads test hierarchy.
+The provider tests use mocked API responses and exercise normalization without secrets or network access. Stripe, Google Ads, and Meta Ads passed read-only live acceptance for the original Phase 1 build. Since 2026-09-09, production Google Ads access is determined by the Cloud project owning the OAuth credentials, not a Developer Token. The Phase 1 test integration uses a separate Google Ads test hierarchy. Historical acceptance does not establish current credential validity.

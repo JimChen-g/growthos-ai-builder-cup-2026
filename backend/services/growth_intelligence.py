@@ -281,7 +281,6 @@ def validate_live_configuration(settings: Settings) -> None:
                 else None
             )
         ),
-        "GOOGLE_ADS_DEVELOPER_TOKEN": settings.google_ads_developer_token,
         "GOOGLE_ADS_CUSTOMER_ID": settings.google_ads_customer_id,
         "META_ADS_ACCESS_TOKEN": settings.meta_ads_access_token,
         "META_ADS_AD_ACCOUNT_ID": settings.meta_ads_ad_account_id,

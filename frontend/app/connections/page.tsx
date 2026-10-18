@@ -347,12 +347,13 @@ function GoogleAdsForm({ item, busy, act }: {
     currency: item.currency ?? "",
   });
   const change = (field: keyof typeof form, value: string) => setForm((current) => ({ ...current, [field]: value }));
-  const complete = /^[A-Z]{3}$/.test(form.currency) && form.developer_token.trim() && form.customer_id.trim() && (method === "access"
+  const complete = /^[A-Z]{3}$/.test(form.currency) && form.customer_id.trim() && (method === "access"
     ? form.access_token.trim() : form.client_id.trim() && form.client_secret.trim() && form.refresh_token.trim());
-  const field = (name: keyof typeof form, label: MessageKey, secret = false) => (
+  const field = (name: keyof typeof form, label: MessageKey, secret = false, hint?: MessageKey) => (
     <label className="field" key={name}>
       <span>{t(label)}</span>
-      <input autoComplete={secret ? "new-password" : "off"} disabled={busy} id={`google-${name}`} type={secret ? "password" : "text"} value={form[name]} onChange={(event) => change(name, event.target.value)} />
+      <input aria-describedby={hint ? `google-${name}-hint` : undefined} autoComplete={secret ? "new-password" : "off"} disabled={busy} id={`google-${name}`} type={secret ? "password" : "text"} value={form[name]} onChange={(event) => change(name, event.target.value)} />
+      {hint && <small id={`google-${name}-hint`}>{t(hint)}</small>}
     </label>
   );
   return (
@@ -360,8 +361,9 @@ function GoogleAdsForm({ item, busy, act }: {
       event.preventDefault();
       if (!complete || busy) return;
       const body = {
-        developer_token: form.developer_token.trim(), customer_id: form.customer_id.replace(/[-\s]/g, ""),
+        customer_id: form.customer_id.replace(/[-\s]/g, ""),
         currency: form.currency,
+        ...(form.developer_token.trim() ? { developer_token: form.developer_token.trim() } : {}),
         ...(form.login_customer_id.trim() ? { login_customer_id: form.login_customer_id.replace(/[-\s]/g, "") } : {}),
         ...(method === "access" ? { access_token: form.access_token.trim() } : {
           client_id: form.client_id.trim(), client_secret: form.client_secret.trim(), refresh_token: form.refresh_token.trim(),
@@ -370,7 +372,7 @@ function GoogleAdsForm({ item, busy, act }: {
       act(() => requestJson("/api/v1/connections/google_ads/config", { method: "PUT", body: JSON.stringify(body) }), t("connections.saved"))
         .then((saved) => { if (saved) setForm((current) => ({ ...current, developer_token: "", access_token: "", client_secret: "", refresh_token: "" })); });
     }}>
-      {field("developer_token", "connections.googleDeveloperToken", true)}
+      {field("developer_token", "connections.googleDeveloperToken", true, "connections.googleDeveloperTokenHint")}
       {field("customer_id", "connections.googleCustomerId")}
       {field("login_customer_id", "connections.googleManagerId")}
       <CurrencyField value={form.currency} onChange={(value) => change("currency", value)} disabled={busy} provider="google_ads" />

@@ -51,14 +51,15 @@ class GoogleAdsIntegrationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     access_token: SecretStr | None = None
-    developer_token: SecretStr
+    # Backward-compatible input only; no longer transmitted after the 2026-09-09 sunset.
+    developer_token: SecretStr | None = None
     customer_id: str
     login_customer_id: str | None = None
     oauth_client_id: str | None = None
     oauth_client_secret: SecretStr | None = None
     oauth_refresh_token: SecretStr | None = None
     oauth_token_url: HttpUrl = "https://oauth2.googleapis.com/token"
-    api_version: str = Field(default="v25", pattern=r"^v\d+$")
+    api_version: str = Field(default="v26", pattern=r"^v\d+$")
     api_base_url: HttpUrl = "https://googleads.googleapis.com"
     currency: str = Field(default="USD", min_length=3, max_length=3)
     target_roas: Decimal = Field(default=Decimal("3.0"), gt=0)
@@ -461,7 +462,6 @@ class GoogleAdsIntegration:
     async def _headers(self) -> dict[str, str]:
         headers = {
             "Authorization": f"Bearer {await self._access_token()}",
-            "developer-token": self.config.developer_token.get_secret_value(),
             "Content-Type": "application/json",
         }
         if self.config.login_customer_id:

@@ -815,7 +815,7 @@ class ConnectionCenterService:
                 ConnectionState.CONNECTED if configured else ConnectionState.NEEDS_CONFIGURATION
             ),
             configured=configured,
-            auth_method="Workspace-owned OAuth or access token + developer token",
+            auth_method="Workspace-owned OAuth or access token (Cloud project API access)",
             configuration_source=connection.source if connection else None,
             selected_account_id=selected,
             currency=connection.credentials.currency if connection else None,
@@ -824,7 +824,7 @@ class ConnectionCenterService:
             setup_kind=ConnectionSetupKind.OAUTH,
             setup_label="Connect your Google Ads account",
             setup_steps=[
-                "Create a Google Ads OAuth client and refresh token",
+                "Create OAuth credentials in a Cloud project with Google Ads API access",
                 "Save your credentials and customer ID in this workspace",
                 "Test the read-only connection",
             ],

@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     google_ads_client_secret: SecretStr | None = None
     google_ads_refresh_token: SecretStr | None = None
     google_ads_contains_eu_political_advertising: bool = False
-    google_ads_api_version: str = "v25"
+    google_ads_api_version: str = "v26"
     google_ads_api_base_url: str = "https://googleads.googleapis.com"
     google_ads_currency: str = "USD"
     google_ads_target_roas: Decimal = Decimal("3.0")
@@ -138,7 +138,6 @@ class Settings(BaseSettings):
         )
         return bool(
             (self.google_ads_access_token or all(refresh))
-            and self.google_ads_developer_token
             and self.google_ads_customer_id
         )
 

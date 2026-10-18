@@ -239,6 +239,83 @@ test("each business connector sends its explicit currency and incomplete currenc
   assert.equal(meta.state[2].accessToken, "");
 });
 
+const googleForm = (changes = {}) => ({
+  developer_token: "", customer_id: "123-456-7890", login_customer_id: "",
+  access_token: "test-access", client_id: "test-client", client_secret: "test-secret",
+  refresh_token: "test-refresh", currency: "USD", ...changes,
+});
+const googleProps = { item: { selected_account_id: null, currency: "USD" }, busy: false, act: async (work) => { await work(); return true; } };
+const saveButton = (view) => nodes(view).find((n) => n?.type === "button" && n.props.type === "submit");
+
+test("Google Ads saves either authentication method without a developer token and omits empty legacy fields", async () => {
+  for (const method of ["access", "oauth"]) {
+    for (const developer_token of ["", "   "]) {
+      let request;
+      const h = harness("app/connections/page.tsx", "GoogleAdsForm", [method, googleForm({ developer_token })], {
+        requestJson: async (pathname, init) => { request = { pathname, method: init.method, body: JSON.parse(init.body) }; },
+      });
+      const view = h.render(googleProps);
+      assert.equal(saveButton(view).props.disabled, false);
+      submit(view); await tick();
+      assert.equal(request.pathname, "/api/v1/connections/google_ads/config");
+      assert.equal(request.method, "PUT");
+      assert.equal(request.body.customer_id, "1234567890");
+      assert.equal(Object.hasOwn(request.body, "developer_token"), false);
+      assert.equal(Object.hasOwn(request.body, "login_customer_id"), false);
+      assert.equal(Object.hasOwn(request.body, "access_token"), method === "access");
+      for (const key of ["client_id", "client_secret", "refresh_token"]) assert.equal(Object.hasOwn(request.body, key), method === "oauth");
+      for (const key of ["developer_token", "access_token", "client_secret", "refresh_token"]) assert.equal(h.state[1][key], "");
+    }
+  }
+});
+
+test("Google Ads retains explicitly supplied legacy developer tokens without making them required", async () => {
+  let body;
+  const h = harness("app/connections/page.tsx", "GoogleAdsForm", ["access", googleForm({ developer_token: " legacy-token ", login_customer_id: " 555-123-4567 " })], {
+    requestJson: async (_pathname, init) => { body = JSON.parse(init.body); },
+  });
+  submit(h.render(googleProps)); await tick();
+  assert.equal(body.developer_token, "legacy-token");
+  assert.equal(body.login_customer_id, "5551234567");
+  assert.equal(h.state[1].developer_token, "");
+});
+
+test("optional Google Ads developer token does not bypass actual OAuth, account, currency or busy checks", async () => {
+  for (const method of ["access", "oauth"]) {
+    const required = ["customer_id", "currency", ...(method === "access" ? ["access_token"] : ["client_id", "client_secret", "refresh_token"])];
+    for (const field of required) {
+      const h = harness("app/connections/page.tsx", "GoogleAdsForm", [method, googleForm({ [field]: "" })], {
+        requestJson: () => assert.fail("incomplete Google Ads setup must not save"),
+      });
+      const view = h.render(googleProps);
+      assert.equal(saveButton(view).props.disabled, true, `${method}: ${field}`);
+      submit(view); await tick();
+    }
+    const h = harness("app/connections/page.tsx", "GoogleAdsForm", [method, googleForm()], {
+      requestJson: () => assert.fail("busy Google Ads form must not save"),
+    });
+    const view = h.render({ ...googleProps, busy: true });
+    assert.equal(saveButton(view).props.disabled, true);
+    submit(view); await tick();
+  }
+});
+
+test("Google Ads optional legacy-token explanation is localized and accessible in every language", () => {
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    const h = harness("app/connections/page.tsx", "GoogleAdsForm", ["oauth", googleForm()], {}, language);
+    const view = h.render(googleProps);
+    assert.ok(text(view).includes(h.messages["connections.googleDeveloperTokenHint"]));
+    assert.match(h.messages["connections.googleDeveloperToken"], /optional|可选|選填/);
+    assert.match(h.messages["connections.googleDeveloperTokenHint"], /2026/);
+    assert.match(h.messages["connections.googleDeveloperTokenHint"], /OAuth/);
+    assert.match(h.messages["connections.googleDeveloperTokenHint"], /Google Cloud/);
+    const input = nodes(view).find((n) => n?.type === "input" && n.props.id === "google-developer_token");
+    assert.equal(input.props.required, undefined);
+    assert.equal(input.props["aria-describedby"], "google-developer_token-hint");
+    assert.ok(nodes(view).some((n) => n?.props?.id === input.props["aria-describedby"]));
+  }
+});
+
 test("new readiness, currency and auth recovery messages exist in all supported languages", () => {
   for (const language of ["en", "zh-Hans", "zh-Hant"]) {
     const messages = require(path.join(frontend, `lib/i18n/ui.${language}.json`));

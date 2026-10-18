@@ -167,7 +167,8 @@ class ProviderFixtures:
         if provider == "google_ads":
             assert request.method == "POST"
             assert "/customers/1234567890/" in path
-            assert request.headers["developer-token"] == SECRETS["developer"]
+            # Legacy stored tokens remain readable but must not be sent after sunset.
+            assert "developer-token" not in request.headers
             assert request.headers["login-customer-id"] == "9988776655"
             query = json.loads(request.content)["query"]
             if "FROM customer" in query:
