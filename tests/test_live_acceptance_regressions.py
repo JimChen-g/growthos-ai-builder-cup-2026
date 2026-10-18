@@ -25,7 +25,8 @@ from backend.services.phase2_runtime import build_demo_runtime
 from backend.services.real_intelligence import build_real_intelligence_runtime
 
 AsyncClient = httpx.AsyncClient
-TODAY = date(2026, 1, 31)
+# As-of date: the reporting window ends on the preceding complete calendar day.
+TODAY = date(2026, 2, 1)
 SECRETS = {
     "stripe": "rk_test_judge_a_stripe_only",
     "google": "test_judge_a_google_access_only",
@@ -96,6 +97,7 @@ class ProviderFixtures:
                             {
                                 "id": "sub_fixture",
                                 "status": "active",
+                                "customer": {"discount": None},
                                 "items": {
                                     "data": [
                                         {
@@ -173,7 +175,13 @@ class ProviderFixtures:
                     200,
                     json={
                         "results": [
-                            {"customer": {"id": "1234567890", "currencyCode": "USD"}},
+                            {
+                                "customer": {
+                                    "id": "1234567890",
+                                    "currencyCode": "USD",
+                                    "timeZone": "UTC",
+                                }
+                            },
                         ]
                     },
                 )
@@ -205,7 +213,9 @@ class ProviderFixtures:
         assert request.method == "GET"
         assert path.startswith("/v26.0/act_24680")
         if not path.endswith("/insights"):
-            return httpx.Response(200, json={"id": "act_24680", "currency": "USD"})
+            return httpx.Response(
+                200, json={"id": "act_24680", "currency": "USD", "timezone_name": "UTC"}
+            )
         period = json.loads(request.url.params["time_range"])
         current = period["since"] == "2026-01-01"
         return httpx.Response(
@@ -372,6 +382,10 @@ async def test_own_connections_flow_through_real_adapters_into_live_metrics(
     assert payload["audit_recorded"] is True
     assert payload["company"] is None
     assert payload["revenue"]["period"] == {"start": "2026-01-01", "end": "2026-01-31"}
+    assert payload["period_policy"] == "common_complete_calendar_days"
+    assert payload["revenue"]["reporting_timezone"] == "UTC"
+    assert payload["google_ads"]["reporting_timezone"] == "UTC"
+    assert payload["meta_ads"]["reporting_timezone"] == "UTC"
     assert Decimal(payload["revenue"]["revenue"]) == 400
     assert Decimal(payload["revenue"]["mrr"]) == 100
     assert payload["revenue"]["customers"] == 2

@@ -1,5 +1,9 @@
 {
   "exact": {
+    "Monthly recurring revenue (MRR)": "月度经常性收入（MRR）",
+    "Combined ad ROAS": "合并广告 ROAS",
+    "Month-end subscription snapshot; no prior MRR comparison": "月末订阅快照，未提供上期 MRR 对比",
+    "vs. prior reporting period": "较上一报表期间",
     "The account currency does not match the saved reporting currency. Update the connection currency and test again.": "账户币种与保存的报表币种不一致，请更新连接币种后重新测试。",
     "Paste your own Vertex AI API key": "粘贴你自己的 Vertex AI API 密钥",
     "Workspace-owned OAuth or access token + developer token": "当前工作区的 OAuth 凭据或访问令牌 + 开发者令牌",
@@ -171,6 +175,9 @@
     "Read-only revenue intelligence connection.": "只读的收入数据连接。"
   },
   "tpl": {
+    "periodRevUp": "期间实收收入较上一期间增长 {pct}（非 MRR 增长率）",
+    "periodRevDown": "期间实收收入较上一期间下降 {pct}（非 MRR 增长率）",
+    "periodRevFlat": "期间实收收入与上一期间持平（非 MRR 增长率）",
     "listSep": "、",
     "listAnd": "和",
     "execSummary": "增长健康度 {score}/100（{band}）。{momentum}，主要风险是 {risk}。",

@@ -80,7 +80,7 @@ export type BriefingSignal = {
   key: string;
   label: string;
   current_value: string;
-  change_pct: NumberValue;
+  change_pct: NumberValue | null;
   context: string;
   provenance: DataProvenance;
 };
@@ -104,7 +104,7 @@ export type FounderDailyBriefing = {
 export type DashboardMetric = {
   key: string;
   label: string;
-  value: NumberValue;
+  value: NumberValue | null;
   formatted_value: string;
   trend: string;
   source: string;
@@ -228,25 +228,39 @@ export type DemoScript = {
   }>;
 };
 
+export type AccountEnvironment = "test" | "live" | "unknown";
+
+export type SourceReportingMetadata = {
+  account_environment?: AccountEnvironment;
+  period?: { start: string; end: string };
+  reporting_timezone?: string | null;
+  collected_at?: string | null;
+};
+
 export type LiveGrowthIntelligence = {
   audit_recorded?: boolean;
+  period_policy?: "common_complete_calendar_days" | "fixture";
   data_source_mode: "live";
   company: {
     company_name: string;
   } | null;
-  revenue: {
+  revenue: SourceReportingMetadata & {
     revenue: NumberValue;
-    mrr: NumberValue;
+    mrr: NumberValue | null;
+    mrr_status?: "complete" | "incomplete";
+    mrr_policy?: string;
+    mrr_warnings?: string[];
+    mrr_as_of?: string | null;
     currency: string;
     growth_rate_pct: NumberValue | null;
   };
-  google_ads: {
+  google_ads: SourceReportingMetadata & {
     roas: NumberValue | null;
     cac: NumberValue | null;
     spend: NumberValue;
     currency: string;
   };
-  meta_ads: {
+  meta_ads: SourceReportingMetadata & {
     roas: NumberValue | null;
     cac: NumberValue | null;
     spend: NumberValue;
@@ -316,7 +330,11 @@ export type ConnectionAccount = {
 };
 
 export type ConnectionStatus = {
+  account_environment?: AccountEnvironment;
   currency?: string | null;
+  saved_at?: string | null;
+  expires_at?: string | null;
+  storage_status?: "saved" | "missing" | "expired" | "unavailable" | "server_environment" | "unknown";
   provider: ConnectorProvider;
   display_name: string;
   category: string;
@@ -345,6 +363,8 @@ export type ConnectionCenter = {
 };
 
 export type ConnectionTestResult = {
+  account_environment?: AccountEnvironment;
+  checked_at?: string | null;
   provider: ConnectorProvider;
   configured: boolean;
   checked_live: boolean;

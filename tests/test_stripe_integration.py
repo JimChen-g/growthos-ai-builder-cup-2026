@@ -18,6 +18,7 @@ def _stripe_handler(request: httpx.Request) -> httpx.Response:
                     {
                         "id": "sub_monthly",
                         "status": "active",
+                        "customer": {"discount": None},
                         "items": {
                             "data": [
                                 {
@@ -34,6 +35,7 @@ def _stripe_handler(request: httpx.Request) -> httpx.Response:
                     {
                         "id": "sub_yearly",
                         "status": "active",
+                        "customer": {"discount": None},
                         "items": {
                             "data": [
                                 {

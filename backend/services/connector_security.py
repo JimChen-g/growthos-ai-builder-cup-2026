@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
@@ -26,6 +27,15 @@ class QuotaExceededError(RuntimeError):
     """A tenant exhausted its daily allowance for one provider."""
 
 
+@dataclass(frozen=True)
+class CredentialMetadata:
+    """Non-secret lifecycle information; never a claim of provider verification."""
+
+    storage_status: str
+    saved_at: datetime | None = None
+    expires_at: datetime | None = None
+
+
 class CredentialVault(Protocol):
     @property
     def enabled(self) -> bool: ...
@@ -35,6 +45,10 @@ class CredentialVault(Protocol):
     async def put(self, tenant_id: str, provider: ConnectorProvider, secret: SecretStr) -> None: ...
 
     async def delete(self, tenant_id: str, provider: ConnectorProvider) -> None: ...
+
+    async def metadata(
+        self, tenant_id: str, provider: ConnectorProvider
+    ) -> CredentialMetadata: ...
 
 
 class EncryptedCredentialVault:
@@ -56,6 +70,15 @@ class EncryptedCredentialVault:
             contents = self._read()
             value = contents.get(tenant_id, {}).get(provider.value)
             return SecretStr(value) if isinstance(value, str) and value else None
+
+    async def metadata(
+        self, tenant_id: str, provider: ConnectorProvider
+    ) -> CredentialMetadata:
+        if not self.enabled:
+            return CredentialMetadata("unavailable")
+        # Legacy local vaults do not store timestamps. Do not fabricate them or
+        # migrate local credentials into the hosted account's private workspace.
+        return CredentialMetadata("saved" if await self.get(tenant_id, provider) else "missing")
 
     async def put(
         self,
@@ -189,6 +212,27 @@ class FirestoreCredentialVault:
             raise CredentialVaultError(
                 "stored connector credential could not be decrypted"
             ) from error
+
+    async def metadata(
+        self, tenant_id: str, provider: ConnectorProvider
+    ) -> CredentialMetadata:
+        if not self.enabled:
+            return CredentialMetadata("unavailable")
+        snapshot = await asyncio.to_thread(self._ref(tenant_id, provider).get)
+        if not snapshot.exists:
+            return CredentialMetadata("missing")
+        data = snapshot.to_dict() or {}
+        saved_at = data.get("updated_at")
+        expires_at = data.get("expires_at")
+        # Return only validated lifecycle fields, not ciphertext or plaintext.
+        saved_at = saved_at if isinstance(saved_at, datetime) else None
+        expires_at = expires_at if isinstance(expires_at, datetime) else None
+        if saved_at and saved_at.tzinfo is None:
+            saved_at = saved_at.replace(tzinfo=UTC)
+        if expires_at and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        status = "expired" if expires_at and expires_at <= datetime.now(UTC) else "saved"
+        return CredentialMetadata(status, saved_at, expires_at)
 
     async def put(self, tenant_id: str, provider: ConnectorProvider, secret: SecretStr) -> None:
         if not self._fernet:

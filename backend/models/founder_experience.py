@@ -46,7 +46,7 @@ class BriefingSignal(BaseModel):
     key: str
     label: str
     current_value: str
-    change_pct: Decimal
+    change_pct: Decimal | None
     context: str
     provenance: DataProvenance
 
@@ -76,7 +76,7 @@ class DashboardMetric(BaseModel):
 
     key: str
     label: str
-    value: Decimal = Field(ge=0)
+    value: Decimal | None = Field(ge=0)
     formatted_value: str
     trend: str
     source: str

@@ -32,9 +32,6 @@ from backend.services.phase2_runtime import REPOSITORY_ROOT, Phase2Runtime
 class Phase3DemoFixture(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    revenue_change_pct: Decimal
-    google_ads_roas_change_pct: Decimal
-    ai_visibility_change_pct: Decimal
     visibility_observations: list[AIVisibilityObservation] = Field(min_length=1)
     feedback_signals: list[FeedbackSignal] = Field(min_length=1)
 
@@ -123,9 +120,10 @@ class FounderExperienceService:
             company_name=report.company.company_name,
             growth_score=f"{report.growth_score.score}/100",
             growth_band=report.growth_score.band.value,
-            revenue_change=self._signed(self._fixture.revenue_change_pct),
-            google_roas_change=self._signed(self._fixture.google_ads_roas_change_pct),
-            ai_visibility_change=self._signed(self._fixture.ai_visibility_change_pct),
+            revenue_change=self._signed(report.revenue.growth_rate_pct or Decimal("0")),
+            revenue_is_period_total=True,
+            google_roas_change=self._signed(report.google_ads.trend_pct or Decimal("0")),
+            ai_visibility_change="No prior comparison is supplied",
             risk=main_risk,
             recommendation=top_recommendation,
         )
@@ -139,10 +137,12 @@ class FounderExperienceService:
             yesterday=[
                 BriefingSignal(
                     key="revenue",
-                    label="Revenue",
-                    current_value=f"${report.revenue.revenue:,.0f} MRR",
-                    change_pct=self._fixture.revenue_change_pct,
-                    context="vs. yesterday",
+                    label="Monthly recurring revenue (MRR)",
+                    current_value=(
+                        f"${report.revenue.mrr:,.0f}" if report.revenue.mrr is not None else "—"
+                    ),
+                    change_pct=None,
+                    context="Month-end subscription snapshot; no prior MRR comparison",
                     provenance=self._demo_source(
                         "Stripe fixture",
                         "Synthetic Phase 1 revenue snapshot; Stripe is not called.",
@@ -152,8 +152,8 @@ class FounderExperienceService:
                     key="google_ads_roas",
                     label="Google Ads ROAS",
                     current_value=f"{report.google_ads.roas or Decimal('0')}x",
-                    change_pct=self._fixture.google_ads_roas_change_pct,
-                    context="vs. yesterday",
+                    change_pct=report.google_ads.trend_pct,
+                    context="vs. prior reporting period",
                     provenance=self._demo_source(
                         "Google Ads fixture",
                         "Synthetic campaign performance; Google Ads is not called.",
@@ -163,8 +163,11 @@ class FounderExperienceService:
                     key="ai_visibility",
                     label="AI Visibility",
                     current_value=f"{run.geo_analysis.visibility_score:.0f}/100",
-                    change_pct=self._fixture.ai_visibility_change_pct,
-                    context="vs. prior check",
+                    change_pct=None,
+                    context=(
+                        f"Brand appeared in {run.geo_analysis.brand_mentions} of "
+                        f"{run.geo_analysis.prompt_count} tracked prompts"
+                    ),
                     provenance=self._demo_source(
                         "GEO Agent fixture",
                         "Deterministic visibility observations; no AI provider is called.",
@@ -201,10 +204,12 @@ class FounderExperienceService:
             ),
             DashboardMetric(
                 key="revenue",
-                label="Revenue",
-                value=report.revenue.revenue,
-                formatted_value=f"${report.revenue.revenue:,.0f} MRR",
-                trend=f"{self._signed(self._fixture.revenue_change_pct)} vs. yesterday",
+                label="Monthly recurring revenue (MRR)",
+                value=report.revenue.mrr,
+                formatted_value=(
+                    f"${report.revenue.mrr:,.0f}" if report.revenue.mrr is not None else "—"
+                ),
+                trend="Month-end subscription snapshot; no prior MRR comparison",
                 source="Stripe",
                 provenance=self._demo_source(
                     "Stripe fixture",
@@ -214,7 +219,7 @@ class FounderExperienceService:
             ),
             DashboardMetric(
                 key="marketing_roi",
-                label="Marketing ROI",
+                label="Combined ad ROAS",
                 value=marketing_roi,
                 formatted_value=f"{marketing_roi:.1f}x ROAS",
                 trend=f"Google {report.google_ads.roas}x · Meta {report.meta_ads.roas}x",
@@ -230,7 +235,10 @@ class FounderExperienceService:
                 label="AI Visibility",
                 value=Decimal(str(run.geo_analysis.visibility_score)),
                 formatted_value=f"{run.geo_analysis.visibility_score:.0f} / 100",
-                trend=f"{self._signed(self._fixture.ai_visibility_change_pct)} vs. prior check",
+                trend=(
+                    f"Brand appeared in {run.geo_analysis.brand_mentions} of "
+                    f"{run.geo_analysis.prompt_count} tracked prompts"
+                ),
                 source="GEO Agent",
                 provenance=self._demo_source(
                     "GEO Agent fixture",

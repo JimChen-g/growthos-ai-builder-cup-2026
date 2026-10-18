@@ -16,6 +16,7 @@ import {
   type ConnectorProvider,
 } from "../../lib/api";
 import { type MessageKey, useI18n } from "../../lib/i18n";
+import { formatTimestamp, maskedWorkspace } from "../../lib/reporting";
 
 const GROUPS: Array<{ title: MessageKey; hint: MessageKey; providers: ConnectorProvider[] }> = [
   { title: "connections.business", hint: "connections.businessHint", providers: ["stripe", "google_ads", "meta_ads"] },
@@ -29,6 +30,7 @@ function connectionError(caught: unknown): MessageKey {
   if (caught instanceof ApiError) {
     if ([401, 403].includes(caught.status)) return "live.authRequired";
     if (caught.message.includes("account currency does not match")) return "connections.currencyMismatch";
+    if (caught.message.includes("reporting timezone")) return "growth.live.timezoneUnavailable";
     if (caught.status === 404) return "live.serviceUnavailable";
     if ([400, 422].includes(caught.status)) return "connections.invalid";
     if (caught.status === 409) return "connections.configurationUnavailable";
@@ -38,7 +40,7 @@ function connectionError(caught: unknown): MessageKey {
 }
 
 export default function ConnectionsPage() {
-  const { mode } = useDataMode();
+  const { mode, identity, session } = useDataMode();
   const { t } = useI18n();
   const [center, setCenter] = useState<ConnectionCenter | null>(null);
   const [failed, setFailed] = useState<MessageKey | null>(null);
@@ -78,7 +80,10 @@ export default function ConnectionsPage() {
     <main className="page">
       <h1>{t("connections.title")}</h1>
       <p className="lead">{t("connections.subtitle")}</p>
+      <p className="note">{t("connections.signedInAs", { email: identity?.email ?? t("connections.localIdentity") })} · {t("connections.workspace", { id: maskedWorkspace(session?.workspace_id ?? center.tenant_id) })}</p>
       <p className="note">{t("connections.privateHint")}</p>
+      <p className="note">{t("connections.savedNotVerified")}</p>
+      <p className="note">{t("environment.hint")}</p>
       <p className="note">{t("connections.currencyHint")}</p>
       {GROUPS.map((group) => {
         const items = group.providers
@@ -107,7 +112,7 @@ export default function ConnectionsPage() {
 }
 
 function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged: () => Promise<void> }) {
-  const { t, tx } = useI18n();
+  const { t, tx, locale } = useI18n();
   const { capabilities } = useDataMode();
   const [secret, setSecret] = useState("");
   const [vertex, setVertex] = useState({ projectId: item.project_id ?? "", location: item.location ?? "global", apiKey: "" });
@@ -160,7 +165,11 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
       <div className="row-main">
         <strong>{item.display_name}</strong>
         <small>{t(stateLabel[state])} · {tx(item.setup_label)}</small>
+        <small>{t(`connections.storage.${item.storage_status ?? "unknown"}` as MessageKey)}</small>
+        <small>{t("connections.savedAt", { time: formatTimestamp(item.saved_at, locale) })} · {t("connections.expiresAt", { time: formatTimestamp(item.expires_at, locale) })}</small>
+        {item.supports_live_test && !test && <small>{t("connections.notChecked")}</small>}
         {BUSINESS_PROVIDERS.includes(item.provider) && <small>{t("connections.selectedCurrency", { currency: item.currency ?? t("connections.currencyUnset") })}</small>}
+        {BUSINESS_PROVIDERS.includes(item.provider) && <small>{t(`environment.${test?.account_environment ?? item.account_environment ?? "unknown"}` as MessageKey)}</small>}
         <details>
           <summary>{t("common.details")}</summary>
           <p>{tx(item.note)}</p>
@@ -289,7 +298,9 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
               >
                 {busy ? t("connections.testing") : t("connections.test")}
               </button>
-              {test && <span className={`note ${test.success ? "" : "warn"}`}>{t(test.success ? test.checked_live ? "connections.testPassed" : "connections.configuredOnly" : test.message.includes("account currency does not match") ? "connections.currencyMismatch" : "connections.testFailed")}</span>}
+              {test && <span className={`note ${test.success ? "" : "warn"}`}>{t(test.success ? test.checked_live ? "connections.testPassed" : "connections.configuredOnly" : test.message.includes("account currency does not match") ? "connections.currencyMismatch" : test.message.includes("reporting timezone") ? "growth.live.timezoneUnavailable" : "connections.testFailed")}</span>}
+              {test?.checked_at && <small>{t("connections.checkedAt", { time: formatTimestamp(test.checked_at, locale) })}</small>}
+              {test && BUSINESS_PROVIDERS.includes(item.provider) && <small>{t(`environment.${test.account_environment ?? "unknown"}` as MessageKey)}</small>}
             </div>
           )}
           {item.configured && item.configuration_source !== "server_environment" && item.provider !== "reddit" && <div className="actions-row">

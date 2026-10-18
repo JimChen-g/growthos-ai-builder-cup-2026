@@ -1,11 +1,12 @@
 """Phase 1 aggregation service with interchangeable demo and live data sources."""
 
 import asyncio
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -27,7 +28,13 @@ from integrations.metrics import (
     ratio,
     revenue_momentum_score,
 )
-from integrations.models import AdsSnapshot, DateRange, RevenueSnapshot
+from integrations.models import (
+    AccountTimezoneError,
+    AdsSnapshot,
+    DateRange,
+    RevenueSnapshot,
+    verified_reporting_timezone,
+)
 from integrations.stripe import StripeIntegration, StripeIntegrationConfig
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -119,6 +126,7 @@ class GrowthIntelligenceReport(BaseModel):
     google_ads: AdsSnapshot
     meta_ads: AdsSnapshot
     growth_score: GrowthScoreResult
+    period_policy: Literal["fixture", "common_complete_calendar_days"] = "fixture"
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     audit_recorded: bool = True
 
@@ -140,6 +148,8 @@ class GrowthSourceError(RuntimeError):
         }
         label = labels[provider]
         if isinstance(error, AccountCurrencyMismatchError):
+            return f"{label}: {error}"
+        if isinstance(error, AccountTimezoneError):
             return f"{label}: {error}"
         if isinstance(error, IntegrationAPIError) and error.status_code in {401, 403}:
             if provider == "google_ads":
@@ -239,6 +249,9 @@ class GrowthIntelligenceService:
             google_ads=google_ads,
             meta_ads=meta_ads,
             growth_score=self._score_engine.score(inputs),
+            period_policy=(
+                "common_complete_calendar_days" if mode is DataSourceMode.LIVE else "fixture"
+            ),
         )
 
 
@@ -289,10 +302,29 @@ def validate_live_configuration(settings: Settings) -> None:
         )
 
 
+def complete_reporting_period(
+    *, now: datetime, days: int, reporting_timezones: tuple[str, ...]
+) -> DateRange:
+    """Use dates completed in every source, not an identical cross-zone instant range.
+
+    Stripe's reporting day is UTC. Ads use their own account-local day boundaries;
+    choosing the earliest local "today" keeps the common end date closed everywhere.
+    A closed calendar day can still receive delayed attribution updates from providers.
+    """
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("reporting time must include a timezone")
+    if days < 1:
+        raise ValueError("reporting days must be positive")
+    zones = ["UTC", *(verified_reporting_timezone(zone) for zone in reporting_timezones)]
+    end = min(now.astimezone(ZoneInfo(zone)).date() for zone in zones) - timedelta(days=1)
+    return DateRange(start=end - timedelta(days=days - 1), end=end)
+
+
 async def run_growth_intelligence(
     settings: Settings,
     *,
     today: date | None = None,
+    now: datetime | None = None,
 ) -> GrowthIntelligenceReport:
     """Run one Phase 1 analysis using the configured demo or live providers."""
 
@@ -307,17 +339,11 @@ async def run_growth_intelligence(
         return await service.analyze(case.request, mode=mode)
 
     validate_live_configuration(settings)
-    current_date = today or datetime.now(UTC).date()
-    period = DateRange(
-        start=current_date - timedelta(days=settings.analysis_days - 1),
-        end=current_date,
-    )
-    request = GrowthIntelligenceRequest(
-        company=load_company_profile(settings.company_profile_path),
-        period=period,
-        market_demand=settings.market_demand_score,
-        execution_capability=settings.execution_capability_score,
-    )
+    if today is not None and now is not None:
+        raise ValueError("provide either today or now, not both")
+    # Preserve the deterministic calendar-date hook; it represents the as-of day,
+    # not an instruction to include a still-open reporting day.
+    as_of = now or (datetime.combine(today, time.min, UTC) if today else datetime.now(UTC))
     stripe_config = StripeIntegrationConfig(
         api_key=settings.stripe_secret_key,
         currency=settings.stripe_currency,
@@ -359,6 +385,29 @@ async def run_growth_intelligence(
         GoogleAdsIntegration(google_config) as google_ads,
         MetaAdsIntegration(meta_config) as meta_ads,
     ):
+        metadata = await asyncio.gather(
+            google_ads.verify_reporting_metadata(),
+            meta_ads.verify_reporting_metadata(),
+            return_exceptions=True,
+        )
+        failures = [
+            (provider, result)
+            for provider, result in zip(("google_ads", "meta_ads"), metadata, strict=True)
+            if isinstance(result, BaseException)
+        ]
+        if failures:
+            raise GrowthSourceError(failures)
+        period = complete_reporting_period(
+            now=as_of,
+            days=settings.analysis_days,
+            reporting_timezones=(cast(str, metadata[0]), cast(str, metadata[1])),
+        )
+        request = GrowthIntelligenceRequest(
+            company=load_company_profile(settings.company_profile_path),
+            period=period,
+            market_demand=settings.market_demand_score,
+            execution_capability=settings.execution_capability_score,
+        )
         service = GrowthIntelligenceService(
             revenue_source=stripe,
             google_ads_source=google_ads,

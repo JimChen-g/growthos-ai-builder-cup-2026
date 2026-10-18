@@ -123,7 +123,7 @@ async def test_meta_live_test_reads_bounded_insights_without_mutation(tmp_path, 
     def handler(request):
         requests.append(request)
         if not request.url.path.endswith("/insights"):
-            return httpx.Response(200, json={"currency": "USD"})
+            return httpx.Response(200, json={"currency": "USD", "timezone_name": "UTC"})
         return httpx.Response(200, json={"data": []})
 
     settings = app_settings(tmp_path)
@@ -149,7 +149,7 @@ async def test_meta_live_test_reads_bounded_insights_without_mutation(tmp_path, 
     metadata = requests[1]
     assert metadata.method == "GET"
     assert metadata.url.path == "/v26.0/act_123"
-    assert dict(metadata.url.params) == {"fields": "currency"}
+    assert dict(metadata.url.params) == {"fields": "currency,timezone_name"}
     assert metadata.headers["Authorization"] == f"Bearer {META_TOKEN}"
     assert META_TOKEN not in str(metadata.url)
 

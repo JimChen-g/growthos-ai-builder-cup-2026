@@ -29,7 +29,7 @@ def _meta_row(ad_id: str, spend: str, clicks: str, conversions: str, value: str)
 
 def _meta_handler(request: httpx.Request) -> httpx.Response:
     if not request.url.path.endswith("/insights"):
-        return httpx.Response(200, json={"currency": "USD"})
+        return httpx.Response(200, json={"currency": "USD", "timezone_name": "UTC"})
     time_range = json.loads(request.url.params["time_range"])
     rows = (
         [_meta_row("ad_1", "60", "70", "3", "180"), _meta_row("ad_2", "40", "30", "2", "120")]
@@ -103,7 +103,7 @@ async def test_meta_ads_matches_conversion_value_to_selected_event(
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if not request.url.path.endswith("/insights"):
-            return httpx.Response(200, json={"currency": "USD"})
+            return httpx.Response(200, json={"currency": "USD", "timezone_name": "UTC"})
         return httpx.Response(200, json={"data": [row]})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:

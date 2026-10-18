@@ -55,7 +55,7 @@ export default function VisibilityPage() {
       <p className="lead">{t("visibility.subtitle")}</p>
       <section className="hero">
         <div className="hero-number">
-          <span>{metric ? asNumber(metric.value).toFixed(0) : "—"}</span>
+          <span>{metric?.value != null ? asNumber(metric.value).toFixed(0) : "—"}</span>
           <small>/100</small>
         </div>
         <div className="hero-copy">

@@ -196,3 +196,31 @@ button and named the missing sources; Connections exposed the blank currency fie
 save/test until configured. Growth setup guidance was checked in English, Simplified Chinese and
 Traditional Chinese. Actual provider data and nonempty deployed states remain pending the judge's
 own credentials; they are covered only by controlled offline regression fixtures at this stage.
+
+### Independent-review corrections, 2026-10-18
+
+- Live reports use the last 30 calendar dates completed in UTC and both verified Ads account
+  timezones. The common end date can be earlier than UTC yesterday; each source retains its own
+  local day boundaries. The page exposes the interval, source timezone and collection timestamp.
+  Attribution can still change after the reporting day closes.
+- Google Ads totals include historical metrics for removed campaigns. Account currency and
+  timezone are verified before reporting; a missing timezone fails explicitly, without guessing.
+- Stripe MRR uses the documented `net_recurring_v1` policy: supported active/past-due licensed
+  recurring items, normalized monthly, after supported permanent discounts. Customer discounts
+  are inherited unless a subscription overrides them. Unsupported or incomplete pricing,
+  discounts, permissions or bounded coupon lookups produce a null MRR with a reason, not a false
+  zero or an undiscounted complete value. Period cash receipts remain separate from current MRR.
+- Monetary display preserves meaningful fractional values. Sample pages share the same fixture
+  period, MRR, Google-specific/combined ROAS and visibility values; invented daily deltas are removed.
+- Connections distinguishes saved configuration from a live provider check, shows private
+  workspace identity and credential expiry, and fails closed if credentials disappear between
+  reads. Test/live/unknown environment is explicit; a real API call against a test account does
+  not establish production-data accuracy.
+- With separate explicit owner approval, five legacy connections were restored only to that
+  owner's verified private workspace using encrypted, create-only storage with seven-day expiry.
+  No existing record was overwritten and no local credentials or advertising state were changed.
+  This does not change judge workspaces or automatically migrate other users' credentials.
+- Today briefing enrichment and the non-blocking popup COOP warning remain deferred by request.
+
+Release verification and real-provider outcomes are recorded after deployment; this section alone
+does not claim a successful provider read or an independently reconciled production report.

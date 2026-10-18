@@ -20,7 +20,13 @@ from integrations.metrics import (
     ratio,
     rounded,
 )
-from integrations.models import AdsSnapshot, CampaignPerformance, CreativePerformance, DateRange
+from integrations.models import (
+    AdsSnapshot,
+    CampaignPerformance,
+    CreativePerformance,
+    DateRange,
+    verified_reporting_timezone,
+)
 
 
 class MetaAdsIntegrationConfig(BaseModel):
@@ -77,6 +83,9 @@ class MetaAdsIntegration:
         self.config = config
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(timeout=config.request_timeout_seconds)
+        self._account_metadata: dict[str, Any] | None = None
+        self._metadata_lock = asyncio.Lock()
+        self._reporting_timezone: str | None = None
 
     async def __aenter__(self) -> "MetaAdsIntegration":
         return self
@@ -89,7 +98,7 @@ class MetaAdsIntegration:
             await self._client.aclose()
 
     async def collect(self, period: DateRange) -> AdsSnapshot:
-        await self.verify_currency()
+        await self.verify_reporting_metadata()
         current_rows, previous_rows = await asyncio.gather(
             self._insights(period), self._insights(period.previous_period())
         )
@@ -99,17 +108,35 @@ class MetaAdsIntegration:
 
     async def verify_currency(self) -> str:
         """Verify the ad account's currency; Insights monetary values use that unit."""
+        account = await self._read_account_metadata()
+        return verify_account_currency(account.get("currency"), self.config.currency)
+
+    async def verify_reporting_metadata(self) -> str:
+        """Return verified account-local reporting boundaries without assuming UTC."""
+        await self.verify_currency()
+        account = await self._read_account_metadata()
+        self._reporting_timezone = verified_reporting_timezone(account.get("timezone_name"))
+        return self._reporting_timezone
+
+    async def _read_account_metadata(self) -> dict[str, Any]:
+        async with self._metadata_lock:
+            if self._account_metadata is None:
+                self._account_metadata = await self._fetch_account_metadata()
+            return self._account_metadata
+
+    async def _fetch_account_metadata(self) -> dict[str, Any]:
         payload = await request_json(
             self._client,
             self.provider,
             "GET",
             f"{str(self.config.api_base_url).rstrip('/')}/{self.config.api_version}"
             f"/act_{self.config.ad_account_id}",
-            params={"fields": "currency"},
+            params={"fields": "currency,timezone_name"},
             headers={"Authorization": f"Bearer {self.config.access_token.get_secret_value()}"},
         )
-        currency = payload.get("currency") if isinstance(payload, dict) else None
-        return verify_account_currency(currency, self.config.currency)
+        if not isinstance(payload, dict):
+            raise IntegrationAPIError(self.provider, None, "API returned invalid account metadata")
+        return payload
 
     async def _insights(self, period: DateRange) -> list[dict[str, Any]]:
         url = (
@@ -258,6 +285,7 @@ class MetaAdsIntegration:
         return AdsSnapshot(
             source="meta_ads",
             period=period,
+            reporting_timezone=self._reporting_timezone,
             currency=self.config.currency,
             campaigns=campaigns,
             creatives=creatives,

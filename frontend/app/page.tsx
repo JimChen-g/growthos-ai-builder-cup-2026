@@ -17,7 +17,7 @@ function greetingKey(): MessageKey {
 
 export default function TodayPage() {
   const { mode, capabilities } = useDataMode();
-  const { t, tx, locale } = useI18n();
+  const { t, tx } = useI18n();
   const [experience, setExperience] = useState<FounderExperience | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -36,11 +36,10 @@ export default function TodayPage() {
   const health = asNumber(briefing.growth_health);
   const plan = dashboard.recommendations.find((item) => item.priority === 1) ?? dashboard.recommendations[0];
   const pendingRun = dashboard.recommendations.find((item) => item.approval_status === "pending");
-  const today = new Intl.DateTimeFormat(locale, { weekday: "long", month: "long", day: "numeric" }).format(new Date());
 
   return (
     <main className="page">
-      <p className="eyebrow">{today}</p>
+      <p className="eyebrow">{t("sample.case")}</p>
       <h1>{t(greetingKey())}</h1>
 
       <section className="hero" aria-label={t("home.health")}>
@@ -61,8 +60,8 @@ export default function TodayPage() {
           <div key={signal.key}>
             <dt>{tx(signal.label)}</dt>
             <dd>{signal.current_value}</dd>
-            <small className={asNumber(signal.change_pct) >= 0 ? "up" : "down"}>
-              {tx(signal.context)} {signedPercent(signal.change_pct)}
+            <small className={signal.change_pct == null ? undefined : asNumber(signal.change_pct) >= 0 ? "up" : "down"}>
+              {tx(signal.context)} {signal.change_pct == null ? "" : signedPercent(signal.change_pct)}
             </small>
           </div>
         ))}

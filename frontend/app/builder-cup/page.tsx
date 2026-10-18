@@ -70,30 +70,30 @@ const COPY: Record<Language, Record<string, string>> = {
 
 const EVIDENCE_TEXT: Record<Language, string[][]> = {
   en: [
-    ["Monthly recurring revenue", "$30,000, +2% vs prior month", "Synthetic Stripe snapshot"],
-    ["Customer acquisition cost", "$120, +24% vs prior period", "Synthetic Google Ads snapshot"],
-    ["Paid search ROAS", "2.8x vs 3.0x planning target", "Synthetic Google Ads snapshot"],
-    ["AI search visibility", "31/100 across tracked prompts", "Synthetic visibility sample"],
+    ["Monthly recurring revenue", "USD 30,000 at month end; no prior MRR comparison", "Synthetic Stripe subscription snapshot"],
+    ["Combined ad cost per conversion (CAC proxy)", "USD 120 = USD 24,000 total spend / 200 conversions; Google USD 100, Meta USD 150", "Synthetic Google Ads + Meta Ads · 2026-07-01–2026-07-31"],
+    ["Paid search ROAS", "2.8x vs 3.0x planning target", "Synthetic Google Ads · 2026-07-01–2026-07-31"],
+    ["AI search visibility", "40/100: brand mentioned in 2 of 5 tracked answers", "Synthetic visibility sample"],
     ["Customer feedback", "Onboarding setup is the leading negative topic", "Synthetic Reddit and X sample"],
   ],
   "zh-Hans": [
-    ["月度经常性收入", "$30,000，较上月增长 2%", "合成 Stripe 数据快照"],
-    ["获客成本", "$120，较上一周期增长 24%", "合成 Google Ads 数据快照"],
-    ["付费搜索广告支出回报率（ROAS）", "实际 2.8 倍，计划目标 3.0 倍", "合成 Google Ads 数据快照"],
-    ["AI 搜索可见度", "在跟踪的查询中得分 31/100", "合成可见度示例"],
+    ["月度经常性收入", "月末 USD 30,000；未提供上期 MRR 对比", "合成 Stripe 订阅快照"],
+    ["合并广告每次转化成本（CAC 代理指标）", "USD 120 = 总支出 USD 24,000 ÷ 200 次转化；Google USD 100，Meta USD 150", "合成 Google Ads + Meta Ads · 2026-07-01 至 2026-07-31"],
+    ["付费搜索广告支出回报率（ROAS）", "实际 2.8 倍，计划目标 3.0 倍", "合成 Google Ads · 2026-07-01 至 2026-07-31"],
+    ["AI 搜索可见度", "40/100：5 个跟踪回答中有 2 个提及品牌", "合成可见度示例"],
     ["客户反馈", "新用户初始设置是最主要的负面反馈主题", "合成 Reddit 和 X 反馈示例"],
   ],
   "zh-Hant": [
-    ["月度經常性收入", "$30,000，較上月成長 2%", "合成 Stripe 資料快照"],
-    ["獲客成本", "$120，較上一週期增加 24%", "合成 Google Ads 資料快照"],
-    ["付費搜尋廣告支出報酬率（ROAS）", "實際 2.8 倍，計畫目標 3.0 倍", "合成 Google Ads 資料快照"],
-    ["AI 搜尋可見度", "在追蹤的查詢中得分 31/100", "合成可見度範例"],
+    ["月度經常性收入", "月底 USD 30,000；未提供上期 MRR 比較", "合成 Stripe 訂閱快照"],
+    ["合併廣告每次轉換成本（CAC 代理指標）", "USD 120 = 總支出 USD 24,000 ÷ 200 次轉換；Google USD 100，Meta USD 150", "合成 Google Ads + Meta Ads · 2026-07-01 至 2026-07-31"],
+    ["付費搜尋廣告支出報酬率（ROAS）", "實際 2.8 倍，計畫目標 3.0 倍", "合成 Google Ads · 2026-07-01 至 2026-07-31"],
+    ["AI 搜尋可見度", "40/100：5 個追蹤回答中有 2 個提及品牌", "合成可見度範例"],
     ["客戶回饋", "新使用者初始設定是最主要的負面回饋主題", "合成 Reddit 和 X 回饋範例"],
   ],
 };
 const EVIDENCE_IDS = ["EV-MRR", "EV-CAC", "EV-ROAS", "EV-VIS", "EV-FEEDBACK"];
 const SAMPLE_EVIDENCE = Object.fromEntries(Object.entries(EVIDENCE_TEXT).map(([language, rows]) => [language,
-  rows.map(([label, value, source], index) => ({ evidence_id: EVIDENCE_IDS[index], label, value, source, observed_at: "2026-10-15T08:00:00Z" })),
+  rows.map(([label, value, source], index) => ({ evidence_id: EVIDENCE_IDS[index], label, value, source, observed_at: "2026-07-31T23:59:59Z" })),
 ])) as Record<Language, CompetitionEvidence[]>;
 
 export default function BuilderCupPage() {
@@ -105,7 +105,7 @@ export default function BuilderCupPage() {
 }
 
 function DecisionDemo() {
-  const { lang } = useI18n();
+  const { lang, t } = useI18n();
   const c = COPY[lang];
   const [results, setResults] = useState<Partial<Record<Language, CompetitionDecision>>>({});
   const [busy, setBusy] = useState<Partial<Record<Language, "analyze" | "decision" | null>>>({});
@@ -169,6 +169,7 @@ function DecisionDemo() {
     <main className="page decision-demo">
       <p className="eyebrow">{c.eyebrow}</p><h1>{c.title}</h1>
       <p className="lead">{c.lead}</p><p className="note">{c.disclosure}</p>
+      <p className="note">{t("sample.case")}</p>
       <section className="section">
         <p className="eyebrow">{c.sample}</p>
         <dl className="facts stacked">{evidence.map((item) => <div key={item.evidence_id}><dt>{item.evidence_id} · {item.label}</dt><dd>{item.value}<small>{item.source}</small></dd></div>)}</dl>

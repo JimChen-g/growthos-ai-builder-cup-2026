@@ -25,6 +25,7 @@ class BriefingNarrativeContext(BaseModel):
     ai_visibility_change: str
     risk: str
     recommendation: str
+    revenue_is_period_total: bool = False
 
 
 class FounderBriefingNarrative(BaseModel):
@@ -72,6 +73,9 @@ class FounderBriefingAgent:
             momentum = "Revenue is flat"
         else:
             momentum = f"Revenue is up {change.lstrip('+')}"
+        if context.revenue_is_period_total:
+            momentum = momentum.replace("Revenue", "Period revenue", 1)
+            momentum += " vs. prior reporting period"
         return FounderBriefingNarrative(
             executive_summary=(
                 f"Growth health is {context.growth_score} ({context.growth_band}). "

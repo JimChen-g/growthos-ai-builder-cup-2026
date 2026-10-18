@@ -10,6 +10,10 @@ const ts = require("typescript");
 const frontend = path.resolve(__dirname, "..");
 class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+const reporting = {};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(frontend, "lib/reporting.ts"), "utf8"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, { exports: reporting, Intl, Date });
 
 function harness(file, name, initial = [], api = {}, language = "en") {
   const state = initial.slice();
@@ -35,7 +39,8 @@ function harness(file, name, initial = [], api = {}, language = "en") {
       };
       if (id === "next/link") return { default: "a" };
       if (id.endsWith("/i18n")) return { useI18n: () => ({ t, tx: (v) => v, locale: language === "en" ? "en-US" : language, lang: language }) };
-      if (id.endsWith("/DataModeContext")) return { useDataMode: () => ({ mode: "live", capabilities: { public_demo_only: true, live_self_service_enabled: true } }) };
+      if (id.endsWith("/DataModeContext")) return { useDataMode: () => ({ mode: "live", identity: { email: "judge@example.test" }, session: { workspace_id: "0123456789abcdef0123456789abcdef" }, capabilities: { public_demo_only: true, live_self_service_enabled: true } }) };
+      if (id.endsWith("/reporting")) return reporting;
       if (id.endsWith("/api")) return { asNumber: Number, ApiError, ...api };
       if (id.endsWith("/PageState")) return { PageState: "page-state" };
       if (id.endsWith("/ActionLedger")) return { ActionLedger: "ledger", StatusPill: "pill" };
@@ -45,6 +50,7 @@ function harness(file, name, initial = [], api = {}, language = "en") {
   });
   return {
     state, messages,
+    value: exports.TestedComponent,
     render(props = {}) { cursor = 0; return exports.TestedComponent(props); },
     runEffects() { for (const effect of effects.splice(0)) effect(); },
   };
@@ -218,4 +224,116 @@ test("new readiness, currency and auth recovery messages exist in all supported 
     const messages = require(path.join(frontend, `lib/i18n/ui.${language}.json`));
     for (const key of ["auth.expiredTitle", "auth.expiredBody", "auth.reauth", "live.authRequired", "growth.live.missingSources", "growth.live.auditNotSaved", "connections.currency", "connections.refreshFailed"]) assert.ok(messages[key], `${language}: ${key}`);
   }
+});
+
+test("money formatting preserves minor units, fractional JPY MRR and missing values", () => {
+  for (const [amount, currency, expected] of [[0.4, "USD", "0.40"], [12.34, "USD", "12.34"], [0.4, "JPY", "0.40"], [12.34, "JPY", "12.34"], [1, "JPY", "1"], [0.123, "KWD", "0.123"], [0.0001, "USD", "0.0001"]]) {
+    const result = reporting.formatMoney(amount, currency, "en-US");
+    assert.ok(result.includes(currency));
+    assert.ok(result.includes(expected), result);
+  }
+  assert.equal(reporting.formatMoney(null, "USD", "en-US"), "—");
+  assert.equal(reporting.formatMoney("", "USD", "en-US"), "—");
+});
+
+test("Growth renders per-source dates, verified zones, collection times and incomplete MRR in every language", () => {
+  const period = { start: "2026-09-17", end: "2026-10-16" };
+  const report = { ...fixture, period_policy: "common_complete_calendar_days",
+    revenue: { ...fixture.revenue, revenue: "0.40", mrr: null, mrr_status: "incomplete", mrr_policy: "net_recurring_v1", mrr_warnings: ["mrr_temporary_discount_unsupported"], mrr_as_of: "2026-10-18T00:00:00Z", period, reporting_timezone: "UTC", collected_at: "2026-10-18T00:00:00Z" },
+    google_ads: { ...fixture.google_ads, period, reporting_timezone: "America/Los_Angeles", collected_at: "2026-10-18T00:01:00Z" },
+    meta_ads: { ...fixture.meta_ads, period, reporting_timezone: "Asia/Tokyo", collected_at: "2026-10-18T00:02:00Z" },
+  };
+  for (const lang of ["en", "zh-Hans", "zh-Hant"]) {
+    const h = harness("app/dashboard/page.tsx", "LiveGrowth", readyState(report), {}, lang);
+    const rendered = text(h.render());
+    for (const expected of ["2026-09-17", "2026-10-16", "America/Los_Angeles", "Asia/Tokyo", "UTC", "0.40", h.messages["growth.live.mrrIncomplete"], h.messages["growth.live.mrrWarningTemporaryDiscount"], h.messages["growth.live.mrrSnapshot"]]) assert.ok(rendered.includes(expected), `${lang}: ${expected}`);
+    assert.doesNotMatch(rendered, /mrr_temporary_discount_unsupported/);
+    const metric = nodes(h.render()).find((n) => n?.props?.className === "metric" && text(n).includes(h.messages["growth.live.revenue"]));
+    assert.equal(nodes(metric).find((n) => n?.type === "dd").props.children, "—");
+  }
+});
+
+test("Connections exposes current identity but masks workspace and separates storage state from session verification", () => {
+  for (const lang of ["en", "zh-Hans", "zh-Hant"]) {
+    const page = harness("app/connections/page.tsx", "ConnectionsPage", [{ tenant_id: "0123456789abcdef0123456789abcdef", connections: [] }, null], {}, lang);
+    const pageText = text(page.render());
+    assert.ok(pageText.includes("judge@example.test"));
+    assert.ok(pageText.includes("012345…cdef"));
+    assert.ok(!pageText.includes("0123456789abcdef0123456789abcdef"));
+    assert.ok(pageText.includes(page.messages["connections.savedNotVerified"]));
+    for (const storage_status of ["saved", "missing", "expired", "unavailable", "server_environment", "unknown"]) {
+      const h = harness("app/connections/page.tsx", "ConnectionRow", [], {}, lang);
+      const rendered = text(h.render({ item: { ...stripe, storage_status, saved_at: "2026-10-17T00:00:00Z", expires_at: "2026-10-24T00:00:00Z" }, onChanged: async () => {} }));
+      assert.ok(rendered.includes(h.messages[`connections.storage.${storage_status}`]));
+      assert.ok(rendered.includes(h.messages["connections.notChecked"]));
+      assert.ok(rendered.includes("UTC"));
+    }
+  }
+});
+
+test("AI decision evidence uses the same synthetic case as Today and Growth", () => {
+  const sample = harness("app/builder-cup/page.tsx", "SAMPLE_EVIDENCE").value;
+  const business = JSON.parse(fs.readFileSync(path.join(frontend, "../data/demo_phase2_slowing_growth.json"), "utf8"));
+  const founder = JSON.parse(fs.readFileSync(path.join(frontend, "../data/demo_phase3_founder_experience.json"), "utf8"));
+  const totalSpend = Number(business.google_ads.spend) + Number(business.meta_ads.spend);
+  const totalConversions = Number(business.google_ads.conversions) + Number(business.meta_ads.conversions);
+  const visibility = 100 * founder.visibility_observations.filter((v) => v.cited_brands.includes(business.request.company.company_name)).length / founder.visibility_observations.length;
+  for (const lang of ["en", "zh-Hans", "zh-Hant"]) {
+    assert.ok(sample[lang][0].value.includes(Number(business.revenue.mrr).toLocaleString("en-US")));
+    assert.ok(sample[lang][1].value.includes(String(totalSpend / totalConversions)));
+    assert.ok(sample[lang][2].value.includes(business.google_ads.roas));
+    assert.ok(sample[lang][3].value.includes(`${visibility}/100`));
+    assert.ok(sample[lang].every((e) => e.observed_at.startsWith(business.request.period.end)));
+    assert.ok(!JSON.stringify(sample[lang]).includes("31/100"));
+  }
+  assert.equal(founder.revenue_change_pct, undefined, "no second, unrelated revenue trend fixture");
+});
+
+test("MRR warning mappings and metadata copy are complete in all languages", () => {
+  const warnings = harness("app/dashboard/page.tsx", "MRR_WARNING_KEYS").value;
+  const en = require(path.join(frontend, "lib/i18n/ui.en.json"));
+  for (const lang of ["en", "zh-Hans", "zh-Hant"]) {
+    const messages = require(path.join(frontend, `lib/i18n/ui.${lang}.json`));
+    assert.deepEqual(Object.keys(messages).sort(), Object.keys(en).sort());
+    for (const key of Object.values(warnings)) assert.ok(messages[key], `${lang}: ${key}`);
+  }
+});
+
+test("a checked connection has a timestamp only for this session", () => {
+  const state = rowState();
+  state[5] = { success: true, checked_live: true, message: "safe", checked_at: "2026-10-18T00:03:00Z" };
+  const h = harness("app/connections/page.tsx", "ConnectionRow", state);
+  const rendered = text(h.render({ item: { ...stripe, configured: true, storage_status: "saved" }, onChanged: async () => {} }));
+  assert.ok(rendered.includes(h.messages["connections.testPassed"]));
+  assert.ok(rendered.includes("12:03 AM UTC"));
+  assert.ok(!rendered.includes(h.messages["connections.notChecked"]));
+});
+
+test("real API test environments are never presented as production results in any language", () => {
+  for (const lang of ["en", "zh-Hans", "zh-Hant"]) {
+    const report = { ...fixture, revenue: { ...fixture.revenue, account_environment: "test" }, google_ads: { ...fixture.google_ads, account_environment: "test" } };
+    const h = harness("app/dashboard/page.tsx", "LiveGrowth", readyState(report), {}, lang);
+    const rendered = text(h.render());
+    assert.ok(rendered.includes(h.messages["environment.testReport"]));
+    assert.ok(rendered.includes(h.messages["environment.test"]));
+    assert.ok(rendered.includes(h.messages["environment.unknown"]));
+    assert.ok(!rendered.includes(h.messages["environment.live"]));
+    for (const environment of ["test", "live", "unknown"]) {
+      const row = harness("app/connections/page.tsx", "ConnectionRow", [], {}, lang);
+      assert.ok(text(row.render({ item: { ...stripe, account_environment: environment }, onChanged: async () => {} })).includes(row.messages[`environment.${environment}`]));
+    }
+    const state = rowState();
+    state[5] = { success: true, checked_live: true, message: "safe", account_environment: "test" };
+    const checked = harness("app/connections/page.tsx", "ConnectionRow", state, {}, lang);
+    assert.ok(text(checked.render({ item: { ...stripe, provider: "google_ads", configured: true, account_environment: "unknown" }, onChanged: async () => {} })).includes(checked.messages["environment.test"]));
+  }
+});
+
+test("timezone verification failures provide safe actionable guidance", async () => {
+  const row = harness("app/connections/page.tsx", "ConnectionRow", rowState(), { requestJson: async () => { throw new ApiError("Google Ads reporting timezone cannot be verified", 502); } });
+  submit(row.render({ item: stripe, onChanged: async () => {} })); await tick();
+  assert.equal(row.state[4], row.messages["growth.live.timezoneUnavailable"]);
+  const state = rowState(); state[5] = { success: false, checked_live: true, message: "Account reporting timezone is unavailable" };
+  const checked = harness("app/connections/page.tsx", "ConnectionRow", state);
+  assert.ok(text(checked.render({ item: stripe, onChanged: async () => {} })).includes(checked.messages["growth.live.timezoneUnavailable"]));
 });

@@ -28,7 +28,12 @@ from integrations.metrics import (
     ratio,
     rounded,
 )
-from integrations.models import AdsSnapshot, CampaignPerformance, DateRange
+from integrations.models import (
+    AdsSnapshot,
+    CampaignPerformance,
+    DateRange,
+    verified_reporting_timezone,
+)
 
 # Google Ads limits for responsive search ads.
 RSA_HEADLINE_MAX = 30
@@ -160,6 +165,9 @@ class GoogleAdsIntegration:
         self._cached_token: str | None = None
         self._token_expires_at = 0.0
         self._token_lock = asyncio.Lock()
+        self._account_metadata: dict[str, Any] | None = None
+        self._metadata_lock = asyncio.Lock()
+        self._reporting_timezone: str | None = None
 
     async def __aenter__(self) -> "GoogleAdsIntegration":
         return self
@@ -172,7 +180,7 @@ class GoogleAdsIntegration:
             await self._client.aclose()
 
     async def collect(self, period: DateRange) -> AdsSnapshot:
-        await self.verify_currency()
+        await self.verify_reporting_metadata()
         current_rows, previous_rows = await asyncio.gather(
             self._search(period), self._search(period.previous_period())
         )
@@ -182,6 +190,29 @@ class GoogleAdsIntegration:
 
     async def verify_currency(self) -> str:
         """Read the immutable account currency before labeling any monetary metrics."""
+        customer = await self._read_account_metadata()
+        return verify_account_currency(customer.get("currencyCode"), self.config.currency)
+
+    async def verify_reporting_metadata(self) -> str:
+        """Return the verified account timezone, sharing one metadata read with currency."""
+        await self.verify_currency()
+        customer = await self._read_account_metadata()
+        self._reporting_timezone = verified_reporting_timezone(customer.get("timeZone"))
+        return self._reporting_timezone
+
+    @property
+    def account_environment(self) -> str:
+        value = (self._account_metadata or {}).get("testAccount")
+        return "test" if value is True else "live" if value is False else "unknown"
+
+    async def _read_account_metadata(self) -> dict[str, Any]:
+        # Adapters are scoped to one report/check, never shared between workspaces.
+        async with self._metadata_lock:
+            if self._account_metadata is None:
+                self._account_metadata = await self._fetch_account_metadata()
+            return self._account_metadata
+
+    async def _fetch_account_metadata(self) -> dict[str, Any]:
         payload = await request_json(
             self._client,
             self.provider,
@@ -189,14 +220,21 @@ class GoogleAdsIntegration:
             f"{str(self.config.api_base_url).rstrip('/')}/{self.config.api_version}"
             f"/customers/{self.config.customer_id}/googleAds:search",
             headers=await self._headers(),
-            json={"query": "SELECT customer.id, customer.currency_code FROM customer LIMIT 1"},
+            json={
+                "query": (
+                    "SELECT customer.id, customer.currency_code, customer.time_zone, "
+                    "customer.test_account "
+                    "FROM customer LIMIT 1"
+                )
+            },
         )
         rows = payload.get("results") if isinstance(payload, dict) else None
         if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
             raise IntegrationAPIError(self.provider, None, "API returned invalid account metadata")
         customer = rows[0].get("customer")
-        currency = customer.get("currencyCode") if isinstance(customer, dict) else None
-        return verify_account_currency(currency, self.config.currency)
+        if not isinstance(customer, dict):
+            raise IntegrationAPIError(self.provider, None, "API returned invalid account metadata")
+        return customer
 
     async def create_campaign(
         self, request: GoogleAdsCampaignCreateRequest
@@ -365,7 +403,6 @@ class GoogleAdsIntegration:
               metrics.conversions_value
             FROM campaign
             WHERE segments.date BETWEEN '{period.start.isoformat()}' AND '{period.end.isoformat()}'
-              AND campaign.status != 'REMOVED'
         """.strip()
         url = (
             f"{str(self.config.api_base_url).rstrip('/')}/{self.config.api_version}"
@@ -484,8 +521,10 @@ class GoogleAdsIntegration:
         )
 
         return AdsSnapshot(
+            account_environment=self.account_environment,
             source="google_ads",
             period=period,
+            reporting_timezone=self._reporting_timezone,
             currency=self.config.currency,
             campaigns=campaigns,
             spend=spend,

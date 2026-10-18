@@ -57,6 +57,9 @@ class FakeLiveSource:
     async def collect(self, period):
         return self.snapshot.model_copy(update={"period": period}, deep=True)
 
+    async def verify_reporting_metadata(self):
+        return "UTC"
+
 
 @pytest.mark.asyncio
 async def test_live_mode_reuses_the_same_aggregation_contract(monkeypatch) -> None:

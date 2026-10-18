@@ -251,6 +251,60 @@ async def test_firestore_vault_encryption_context_expiry_and_disconnect(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_connection_lifecycle_is_private_and_does_not_claim_provider_verification(tmp_path):
+    configured = settings(tmp_path, firebase_auth_required=True)
+    runtime = build_real_intelligence_runtime(configured)
+    db = Database()
+    vault = FirestoreCredentialVault(
+        "project", "(default)", configured.connection_vault_key, client=db
+    )
+    runtime.connections.vault = vault
+    runtime.connections.resolver.vault = vault
+    await runtime.connections.save_secret(
+        "judge-a", ConnectorProvider.STRIPE, SecretStr("rk_private_lifecycle"), currency="USD"
+    )
+    own = await runtime.connections.center("judge-a")
+    stripe = next(c for c in own.connections if c.provider is ConnectorProvider.STRIPE)
+    assert stripe.configured and stripe.storage_status == "saved"
+    assert stripe.saved_at is not None and stripe.expires_at > stripe.saved_at
+    assert timedelta(days=6) < stripe.expires_at - stripe.saved_at <= timedelta(days=7, seconds=1)
+    assert "rk_private_lifecycle" not in own.model_dump_json()
+    assert "ciphertext" not in own.model_dump_json()
+    assert "checked_at" not in own.model_dump_json()  # Saving never claims a successful live test.
+    other = await runtime.connections.center("judge-b")
+    assert all(c.storage_status == "missing" for c in other.connections)
+    assert all(c.saved_at is None and c.expires_at is None for c in other.connections)
+    path = "live_workspaces/judge-a/connections/stripe"
+    db.records[path]["expires_at"] = datetime.now(UTC) - timedelta(seconds=1)
+    expired = await runtime.connections.center("judge-a")
+    stripe = next(c for c in expired.connections if c.provider is ConnectorProvider.STRIPE)
+    assert not stripe.configured and stripe.storage_status == "expired"
+    assert stripe.saved_at is not None
+    # Once TTL has physically deleted the record, the UI must not invent an expiry history.
+    await vault.delete("judge-a", ConnectorProvider.STRIPE)
+    assert (await vault.metadata("judge-a", ConnectorProvider.STRIPE)).storage_status == "missing"
+
+
+@pytest.mark.asyncio
+async def test_vault_unavailable_metadata_does_not_access_storage():
+    vault = FirestoreCredentialVault("project", "(default)", None, client=Database())
+    metadata = await vault.metadata("judge-a", ConnectorProvider.STRIPE)
+    assert metadata.storage_status == "unavailable"
+    assert metadata.saved_at is None and metadata.expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_local_vault_lifecycle_does_not_fabricate_historical_timestamps(tmp_path):
+    runtime = build_real_intelligence_runtime(settings(tmp_path))
+    await runtime.connections.save_secret(
+        "judge-a", ConnectorProvider.STRIPE, SecretStr("rk_local_lifecycle")
+    )
+    metadata = await runtime.connections.vault.metadata("judge-a", ConnectorProvider.STRIPE)
+    assert metadata.storage_status == "saved"
+    assert metadata.saved_at is None and metadata.expires_at is None
+
+
+@pytest.mark.asyncio
 async def test_firestore_quota_is_shared_across_instances_and_tenant_scoped(monkeypatch):
     monkeypatch.setattr("google.cloud.firestore.transactional", transactional)
     db = Database()
@@ -320,11 +374,14 @@ async def test_business_connection_test_uses_only_bounded_reads(tmp_path, monkey
         assert request.method == "POST"
         assert request.url.path.endswith("/customers/1234567890/googleAds:search")
         assert json.loads(request.content)["query"] == (
-            "SELECT customer.id, customer.currency_code FROM customer LIMIT 1"
+            "SELECT customer.id, customer.currency_code, customer.time_zone, "
+            "customer.test_account FROM customer LIMIT 1"
         )
         assert request.headers["authorization"] == "Bearer judge-own-access-token"
         return httpx.Response(
-            200, json={"results": [{"customer": {"id": "1234567890", "currencyCode": "USD"}}]}
+            200, json={"results": [{"customer": {
+                "id": "1234567890", "currencyCode": "USD", "timeZone": "UTC"
+            }}]}
         )
 
     monkeypatch.setattr(

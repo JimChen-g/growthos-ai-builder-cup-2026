@@ -18,6 +18,7 @@ import {
   type LiveGrowthIntelligence,
 } from "../../lib/api";
 import { type MessageKey, useI18n } from "../../lib/i18n";
+import { formatMoney, formatTimestamp } from "../../lib/reporting";
 
 export default function GrowthPage() {
   const { mode, capabilities } = useDataMode();
@@ -67,6 +68,7 @@ function DemoGrowth({
     <main className="page">
       <h1>{t("growth.title")}</h1>
       <p className="lead">{t("growth.subtitle")}</p>
+      <p className="note">{t("sample.case")}</p>
 
       <dl className="metrics">
         {dashboard.metrics.map((metric) => (
@@ -122,6 +124,7 @@ function liveError(caught: unknown): MessageKey {
     if ([401, 403].includes(caught.status)) return "live.authRequired";
     if (caught.message.includes("requires matching Google Ads and Meta Ads currencies")) return "growth.live.currencyMismatch";
     if (caught.message.includes("account currency does not match")) return "connections.currencyMismatch";
+    if (caught.message.includes("reporting timezone")) return "growth.live.timezoneUnavailable";
     if (caught.status === 404) return "live.serviceUnavailable";
     if (caught.status === 409) return "growth.live.configurationIssue";
     if (caught.status === 429) return "live.quota";
@@ -200,8 +203,8 @@ function LiveGrowth() {
     }
   }
 
-  const money = (value: number | string, currency: string) =>
-    new Intl.NumberFormat(locale, { style: "currency", currency: currency.toUpperCase(), currencyDisplay: "code", maximumFractionDigits: 0 }).format(asNumber(value));
+  const money = (value: number | string | null, currency: string) => formatMoney(value, currency, locale);
+  const mrrWarnings = [...new Set(report?.revenue.mrr_warnings ?? [])];
 
   return (
     <main className="page">
@@ -226,6 +229,8 @@ function LiveGrowth() {
 
       {report ? (
         <>
+          <p className="note">{t("environment.hint")}</p>
+          {[report.revenue, report.google_ads, report.meta_ads].some((source) => source.account_environment === "test") && <p className="note warn" role="status">{t("environment.testReport")}</p>}
           <dl className="metrics">
             <div className="metric">
               <dt>{t("growth.live.score")}</dt>
@@ -234,8 +239,9 @@ function LiveGrowth() {
             </div>
             <div className="metric">
               <dt>{t("growth.live.revenue")}</dt>
-              <dd>{money(report.revenue.mrr, report.revenue.currency)}</dd>
-              <small>Stripe</small>
+              <dd>{report.revenue.mrr_status === "incomplete" ? "—" : money(report.revenue.mrr, report.revenue.currency)}</dd>
+              <small>{report.revenue.mrr == null || report.revenue.mrr_status === "incomplete" ? t("growth.live.mrrIncomplete") : "Stripe"}</small>
+              <small>{t("growth.live.mrrAsOf", { time: formatTimestamp(report.revenue.mrr_as_of, locale) })}</small>
             </div>
             <div className="metric">
               <dt>Google Ads</dt>
@@ -252,10 +258,25 @@ function LiveGrowth() {
             {error && <>{t("growth.live.previousReport")} </>}
             {t("growth.live.assumed")} ·{" "}
             {t("growth.live.updated", {
-              time: new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(new Date(report.generated_at)),
+              time: formatTimestamp(report.generated_at, locale),
             })}
           </p>
           <p className="note">{t("growth.live.currencyNote")}</p>
+          <p className="note">{t("growth.live.fractionalAmounts")}</p>
+          <section className="section" aria-label={t("growth.live.sourceDetails")}>
+            <h2>{t("growth.live.sourceDetails")}</h2>
+            <p className="note">{t(report.period_policy === "common_complete_calendar_days" ? "growth.live.periodPolicy" : "growth.live.periodUnknown")}</p>
+            <dl className="facts stacked">
+              {([{ name: "Stripe", source: report.revenue }, { name: "Google Ads", source: report.google_ads }, { name: "Meta Ads", source: report.meta_ads }]).map(({ name, source }) => <div key={name}>
+                <dt>{name}</dt>
+                <dd>{t(`environment.${source.account_environment ?? "unknown"}` as MessageKey)}<small>{t("growth.live.period", { start: source.period?.start ?? "—", end: source.period?.end ?? "—" })}</small><small>{t("growth.live.reportingTimezone", { timezone: source.reporting_timezone ?? t("growth.live.unknownTimezone") })}</small><small>{t("growth.live.collectedAt", { time: formatTimestamp(source.collected_at, locale) })}</small></dd>
+              </div>)}
+            </dl>
+            <p className="note">{t("growth.live.mrrSnapshot")}</p>
+            <p className="note">{t("growth.live.periodRevenue", { amount: money(report.revenue.revenue, report.revenue.currency) })}</p>
+            <p className="note">{t(report.revenue.mrr_policy === "net_recurring_v1" ? "growth.live.mrrPolicy" : "growth.live.mrrPolicyUnknown")}</p>
+            {mrrWarnings.length > 0 && <ul className="plain note warn">{mrrWarnings.map((warning) => <li key={warning}>{t(MRR_WARNING_KEYS[warning] ?? "growth.live.mrrWarningUnknown")}</li>)}</ul>}
+          </section>
           {report.audit_recorded === false && <p className="note warn" role="status">{t("growth.live.auditNotSaved")}</p>}
         </>
       ) : (
@@ -270,3 +291,17 @@ function LiveGrowth() {
     </main>
   );
 }
+
+const MRR_WARNING_KEYS: Record<string, MessageKey> = {
+  mrr_subscriptions_unavailable: "growth.live.mrrWarningSubscriptions",
+  mrr_items_incomplete: "growth.live.mrrWarningItems",
+  mrr_tiered_unsupported: "growth.live.mrrWarningTiered",
+  mrr_discount_unexpanded: "growth.live.mrrWarningDiscountDetails",
+  mrr_discount_unsupported: "growth.live.mrrWarningDiscount",
+  mrr_temporary_discount_unsupported: "growth.live.mrrWarningTemporaryDiscount",
+  mrr_price_unsupported: "growth.live.mrrWarningPrice",
+  mrr_tax_inclusive_unsupported: "growth.live.mrrWarningTax",
+  mrr_customer_discount_unavailable: "growth.live.mrrWarningCustomerDiscount",
+  mrr_discount_lookup_limit: "growth.live.mrrWarningLookupLimit",
+  mrr_discount_unavailable: "growth.live.mrrWarningDiscountUnavailable",
+};

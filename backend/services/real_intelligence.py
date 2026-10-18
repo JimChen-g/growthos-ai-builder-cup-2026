@@ -60,12 +60,14 @@ from integrations.geo_providers import (
 )
 from integrations.google_ads import GoogleAdsIntegration, GoogleAdsIntegrationConfig
 from integrations.meta_ads import MetaAdsIntegration, MetaAdsIntegrationConfig
+from integrations.models import AccountTimezoneError
 from integrations.social_sources import (
     RedditSearchFallback,
     RedditSearchFallbackConfig,
     XRecentSearch,
     XRecentSearchConfig,
 )
+from integrations.stripe import stripe_account_environment
 
 _CREDENTIAL_PROVIDERS = {
     ConnectorProvider.OPENAI,
@@ -335,16 +337,50 @@ class ConnectionCenterService:
                 "or claim broad Data API access."
             ),
         )
+        connections = [
+            *ai_statuses,
+            reddit,
+            await self._google_ads_status(tenant_id),
+            await self._meta_ads_status(tenant_id),
+            await self._stripe_status(tenant_id),
+        ]
+        # Credentials remain resolved exclusively in this server-derived workspace.
+        # Expose lifecycle evidence separately from the ephemeral read-only test result.
+        metadata = getattr(self.vault, "metadata", None)
+        if metadata is not None:
+            async def with_metadata(item: ConnectionStatus) -> ConnectionStatus:
+                if item.configuration_source == "server_environment":
+                    return item.model_copy(update={"storage_status": "server_environment"})
+                provider = (
+                    ConnectorProvider.PERPLEXITY
+                    if item.provider is ConnectorProvider.REDDIT
+                    else item.provider
+                )
+                lifecycle = await metadata(tenant_id, provider)
+                updates = {
+                    "storage_status": lifecycle.storage_status,
+                    "saved_at": lifecycle.saved_at,
+                    "expires_at": lifecycle.expires_at,
+                }
+                if lifecycle.storage_status in {"missing", "expired", "unavailable"}:
+                    # Expiry or disconnect can occur between the credential and lifecycle
+                    # reads. Never retain a ready state after observing invalid storage.
+                    updates.update(
+                        configured=False,
+                        state=ConnectionState.NEEDS_CONFIGURATION,
+                        configuration_source=None,
+                        selected_account_id=None,
+                        currency=None,
+                        accounts=[],
+                        account_environment="unknown",
+                    )
+                return item.model_copy(update=updates)
+
+            connections = list(await asyncio.gather(*(with_metadata(item) for item in connections)))
         return ConnectionCenter(
             tenant_id=tenant_id,
             vault_encryption_enabled=self.vault.enabled,
-            connections=[
-                *ai_statuses,
-                reddit,
-                await self._google_ads_status(tenant_id),
-                await self._meta_ads_status(tenant_id),
-                await self._stripe_status(tenant_id),
-            ],
+            connections=connections,
         )
 
     async def save_secret(
@@ -503,10 +539,12 @@ class ConnectionCenterService:
                 message="Connect this account before testing.",
             )
         started = monotonic()
+        account_environment = "unknown"
         try:
             await self.quota.consume(tenant_id, provider)
             async with httpx.AsyncClient(timeout=15.0) as client:
                 if provider is ConnectorProvider.STRIPE:
+                    account_environment = stripe_account_environment(settings.stripe_secret_key)
                     authorization = f"Bearer {settings.stripe_secret_key.get_secret_value()}"
                     for endpoint in ("charges", "subscriptions"):
                         response = await client.get(
@@ -536,7 +574,8 @@ class ConnectionCenterService:
                         ),
                         client=client,
                     )
-                    await adapter.verify_currency()
+                    await adapter.verify_reporting_metadata()
+                    account_environment = adapter.account_environment
         except (IntegrationError, httpx.HTTPError, ValueError, QuotaExceededError) as error:
             return ConnectionTestResult(
                 provider=provider,
@@ -551,6 +590,7 @@ class ConnectionCenterService:
             configured=True,
             checked_live=True,
             success=True,
+            account_environment=account_environment,
             message="Live read-only connection verified.",
             latency_ms=int((monotonic() - started) * 1000),
         )
@@ -623,7 +663,7 @@ class ConnectionCenterService:
                         ),
                         client=client,
                     )
-                    await adapter.verify_currency()
+                    await adapter.verify_reporting_metadata()
                 success = True
                 message = "Live Meta Ads read-only Insights request completed successfully."
         except QuotaExceededError as error:
@@ -845,6 +885,9 @@ class ConnectionCenterService:
             auth_method="Restricted secret key",
             configuration_source=connection.source if connection else None,
             currency=connection.currency if connection else None,
+            account_environment=stripe_account_environment(
+                connection.secret if connection else None
+            ),
             supports_live_test=True,
             setup_kind=ConnectionSetupKind.RESTRICTED_KEY,
             setup_label="Connect a restricted Stripe key",
@@ -1287,6 +1330,8 @@ def _safe_provider_error(error: Exception) -> str:
     if isinstance(error, QuotaExceededError):
         return "Daily provider usage limit reached. Try again tomorrow."
     if isinstance(error, AccountCurrencyMismatchError):
+        return str(error)
+    if isinstance(error, AccountTimezoneError):
         return str(error)
     if isinstance(error, TimeoutError):
         return "The provider request timed out. Retry the unavailable prompts."

@@ -82,10 +82,17 @@ async def test_phase3_service_builds_briefing_dashboard_and_feedback_from_phase2
         "ai_visibility",
     ]
     assert [item.change_pct for item in experience.briefing.yesterday] == [
-        Decimal("12.0"),
-        Decimal("20.0"),
-        Decimal("8.0"),
+        None,
+        Decimal("2.0"),
+        None,
     ]
+    assert (
+        "Period revenue is up 30% vs. prior reporting period"
+        in experience.briefing.executive_summary
+    )
+    assert experience.briefing.yesterday[0].label == "Monthly recurring revenue (MRR)"
+    assert "no prior MRR comparison" in experience.briefing.yesterday[0].context
+    assert experience.briefing.yesterday[2].context == "Brand appeared in 2 of 5 tracked prompts"
     assert experience.briefing.top_recommendation == "Improve AI Search Presence"
     assert experience.briefing.pending_approval_id is not None
     assert experience.briefing.provenance.mode is DataMode.DEMO

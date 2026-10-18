@@ -68,6 +68,14 @@ export function translateServerText(text: string, lang: Language): string {
 
   const rules: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
     [
+      /^Growth health is ([\d.]+)\/100 \((\w+)\)\. (?:Period revenue is (up|down) ([\d.]+%)|Period revenue is flat) vs\. prior reporting period, while (.+) remains the main risk\.$/,
+      (m) => tpl("execSummary", {
+        score: Math.round(Number(m[1])), band: band(m[2]),
+        momentum: m[3] ? tpl(m[3] === "up" ? "periodRevUp" : "periodRevDown", { pct: m[4] }) : pack.tpl.periodRevFlat,
+        risk: finding(m[5]),
+      }),
+    ],
+    [
       /^Growth health is ([\d.]+)\/100 \((\w+)\)\. (?:Revenue is (up|down) ([\d.]+%)|Revenue is flat), while (.+) remains the main risk\.$/,
       (m) =>
         tpl("execSummary", {

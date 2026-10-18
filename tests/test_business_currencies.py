@@ -132,6 +132,7 @@ async def test_stripe_revenue_and_mrr_use_currency_minor_units_and_filter_other_
                     "data": [
                         {
                             "status": "active",
+                            "customer": {"discount": None},
                             "items": {
                                 "data": [
                                     {
@@ -220,7 +221,7 @@ async def test_ads_cannot_publish_mislabeled_or_unverified_metrics(provider, act
         if provider == "google":
             assert "FROM customer" in json.loads(request.content)["query"]
             return httpx.Response(200, json={"results": [{"customer": {"currencyCode": actual}}]})
-        assert request.url.params["fields"] == "currency"
+        assert request.url.params["fields"] == "currency,timezone_name"
         return httpx.Response(200, json={"currency": actual})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -241,12 +242,14 @@ async def test_ads_empty_accounts_keep_verified_non_usd_currency(provider):
         if provider == "google":
             if "FROM customer" in json.loads(request.content)["query"]:
                 return httpx.Response(
-                    200, json={"results": [{"customer": {"currencyCode": "HKD"}}]}
+                    200, json={"results": [{"customer": {
+                        "currencyCode": "HKD", "timeZone": "Asia/Hong_Kong"
+                    }}]}
                 )
             return httpx.Response(200, json=[{"results": []}])
         if request.url.path.endswith("insights"):
             return httpx.Response(200, json={"data": []})
-        return httpx.Response(200, json={"currency": "HKD"})
+        return httpx.Response(200, json={"currency": "HKD", "timezone_name": "Asia/Hong_Kong"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         result = await _ads_adapter(provider, client).collect(

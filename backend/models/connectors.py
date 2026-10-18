@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -83,6 +83,12 @@ class ConnectionStatus(BaseModel):
     api_version: str | None = None
     selected_account_id: str | None = None
     currency: str | None = None
+    account_environment: Literal["test", "live", "unknown"] = "unknown"
+    saved_at: datetime | None = None
+    expires_at: datetime | None = None
+    storage_status: Literal[
+        "saved", "missing", "expired", "unavailable", "server_environment", "unknown"
+    ] = "unknown"
     accounts: list[ConnectionAccount] = Field(default_factory=list)
     supports_live_test: bool = False
     demo_available: bool = True
@@ -236,11 +242,13 @@ class ConnectionTestResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     provider: ConnectorProvider
+    account_environment: Literal["test", "live", "unknown"] = "unknown"
     configured: bool
     checked_live: bool
     success: bool
     message: str
     latency_ms: int | None = Field(default=None, ge=0)
+    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class GeoCitation(BaseModel):
