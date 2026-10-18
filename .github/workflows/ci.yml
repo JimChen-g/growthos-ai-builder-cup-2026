@@ -52,6 +52,12 @@ jobs:
           NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: "growthos-ci.invalid"
           NEXT_PUBLIC_FIREBASE_PROJECT_ID: "growthos-ci-fixture"
           NEXT_PUBLIC_FIREBASE_APP_ID: "1:000000000000:web:ci-fixture"
+      - name: Synthetic build must be blocked from Hosting deployment
+        run: |
+          if node ../scripts/verify-hosting-build.cjs growthos-ci-fixture; then
+            echo "Unsafe CI artifact unexpectedly passed the deployment guard" >&2
+            exit 1
+          fi
       - run: npm audit --omit=dev --audit-level=high
 
   contract:

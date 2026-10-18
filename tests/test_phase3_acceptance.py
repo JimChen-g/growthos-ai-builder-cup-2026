@@ -108,6 +108,7 @@ async def test_phase3_service_builds_briefing_dashboard_and_feedback_from_phase2
     }
     assert metrics["growth_score"].value == Decimal("68.0")
     assert metrics["revenue"].value == Decimal("30000.00")
+    assert metrics["revenue"].trend == experience.briefing.yesterday[0].context
     assert metrics["marketing_roi"].value == Decimal("2.4")
     assert metrics["ai_visibility"].value == Decimal("40.0")
     assert metrics["customer_sentiment"].value == Decimal("78.0")

@@ -29,3 +29,13 @@ export function maskedWorkspace(value: string | null | undefined): string {
   if (!value) return "—";
   return value.length > 10 ? `${value.slice(0, 6)}…${value.slice(-4)}` : `${value.slice(0, 3)}…${value.slice(-2)}`;
 }
+
+/** Display-only warning; actual expiry remains enforced by the server. */
+export function connectionExpiryWarning(expiresAt: string | null | undefined, storageStatus?: string, now = Date.now()): "expired" | "expiring" | null {
+  if (storageStatus === "expired") return "expired";
+  if (!expiresAt) return null;
+  const deadline = new Date(expiresAt).getTime();
+  if (!Number.isFinite(deadline)) return null;
+  if (deadline <= now) return "expired";
+  return deadline - now <= 48 * 60 * 60 * 1000 ? "expiring" : null;
+}

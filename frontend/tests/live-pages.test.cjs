@@ -14,6 +14,15 @@ const reporting = {};
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(frontend, "lib/reporting.ts"), "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText, { exports: reporting, Intl, Date });
+const i18n = {};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(frontend, "lib/i18n/index.tsx"), "utf8"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+}).outputText, { exports: i18n, require(id) {
+  if (id === "react") return { createContext: () => ({}) };
+  if (id === "react/jsx-runtime") return require(id);
+  if (id.endsWith(".json")) return { default: require(path.join(frontend, "lib/i18n", id)) };
+  throw new Error(`Unexpected i18n import ${id}`);
+} });
 
 function harness(file, name, initial = [], api = {}, language = "en", mode = "live") {
   const state = initial.slice();
@@ -419,6 +428,104 @@ test("Sample Customers retains sample-comment wording and counts without the Liv
     assert.ok(rendered.includes(h.messages["customers.comments"]));
     assert.ok(rendered.includes(h.messages["customers.signals"].replace("{n}", "20")));
     assert.ok(!rendered.includes(h.messages["customers.searchResults"].replace("{n}", "20")));
+  }
+});
+
+test("Live customer insight leads with result counts and sources while heuristic sentiment is collapsed", () => {
+  const analysis = { ...keywordAnalysis, sentiment_score: 53, source_counts: { x: 10, reddit: 10 } };
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    const h = harness("app/customer-intelligence/page.tsx", "Insight", [], {}, language);
+    const live = h.render({ analysis, commentsTitle: h.messages["customers.liveComments"], liveResults: true });
+    const firstHero = nodes(live).find((n) => n?.props?.className === "hero");
+    assert.match(text(firstHero), /20/);
+    assert.ok(text(firstHero).includes(h.messages["customers.resultsUnit"]));
+    assert.ok(text(firstHero).includes(h.messages["customers.sourceBreakdown"].replace("{x}", "10").replace("{reddit}", "10")));
+    assert.ok(!text(firstHero).includes("/100"));
+    const sentiment = nodes(live).find((n) => n?.type === "details" && text(n).includes("/100"));
+    assert.ok(sentiment);
+    assert.equal(sentiment.props.open, undefined, "heuristic sentiment is collapsed by default");
+    assert.ok(text(sentiment).includes(h.messages["customers.heuristicHint"]));
+    assert.ok(!nodes(live).some((n) => n?.props?.className === "dot sentiment-neutral"));
+    const sample = h.render({ analysis, commentsTitle: h.messages["customers.comments"], localizeSample: true });
+    assert.match(text(nodes(sample).find((n) => n?.props?.className === "hero")), /53.*\/100/);
+    assert.ok(!text(sample).includes(h.messages["customers.heuristicHint"]));
+  }
+});
+
+test("Live customer history uses search-result counts, not old sentiment scores or inferred complaints", () => {
+  const feedback = { sources: ["x", "reddit"].map((provider) => ({ provider, signal_count: 10 })), signals: [], analysis: { ...keywordAnalysis, sentiment_score: 53 } };
+  const snapshot = { snapshot_id: "history-test", kind: "customer_intelligence", mode: "live", brand: "Intercom", generated_at: "2026-10-18T11:00:00Z", score: 53, summary: "Old unverified complaint", result: feedback };
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    const h = harness("components/HistoryList.tsx", "HistoryList", [], {}, language);
+    const render = (record) => h.render({ history: { items: [{ snapshot: record }] }, title: "History" });
+    const live = render(snapshot);
+    assert.equal(nodes(live).find((n) => n?.props?.className === "index wide").props.children, 20);
+    assert.ok(text(live).includes(h.messages["customers.historyUnverified"]));
+    assert.ok(!text(live).includes(snapshot.summary));
+    assert.equal(nodes(render({ ...snapshot, mode: "demo" })).find((n) => n?.props?.className === "index wide").props.children, "53");
+    const unknown = render({ ...snapshot, result: {} });
+    assert.equal(nodes(unknown).find((n) => n?.props?.className === "index wide").props.children, "—");
+  }
+});
+
+test("dynamic audit templates translate available-source scans and public searches without changing brand names", () => {
+  for (const language of ["zh-Hans", "zh-Hant"]) {
+    const pack = require(path.join(frontend, `lib/i18n/server.${language}.json`));
+    for (const brand of ["Intercom", "Acme + Co. (AI)", "品牌 A"]) {
+      for (const [message, template] of [
+        [`Measured ${brand} across the available connected AI sources.`, "reasonScanAvailable"],
+        [`Read current public signals from available sources for ${brand}.`, "reasonCollectAvailable"],
+      ]) {
+        assert.equal(i18n.translateServerText(message, language), pack.tpl[template].replace("{brand}", brand));
+        assert.equal(i18n.translateServerText(message, "en"), message);
+      }
+    }
+    for (const message of ["Read business data; growth score unavailable", "Connected sources were read successfully, but a revenue baseline or positive ad spend was missing. No growth score or risk band was assigned."]) {
+      assert.equal(i18n.translateServerText(message, language), pack.exact[message]);
+      assert.notEqual(pack.exact[message], message);
+    }
+  }
+});
+
+test("connection expiry warnings use the actual expiry, not the last-update date or a fabricated extension", () => {
+  const now = Date.parse("2026-10-18T12:00:00Z");
+  for (const [expiry, state, expected] of [
+    ["2026-10-18T12:00:00Z", "saved", "expired"], ["2026-10-20T12:00:00Z", "saved", "expiring"],
+    ["2026-10-20T12:00:01Z", "saved", null], [null, "expired", "expired"], ["invalid", "saved", null], [null, "missing", null],
+  ]) assert.equal(reporting.connectionExpiryWarning(expiry, state, now), expected);
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    const page = harness("app/connections/page.tsx", "ConnectionsPage", [{ tenant_id: "owner", connections: [] }, null], {}, language);
+    assert.ok(text(page.render()).includes(page.messages["connections.retentionHint"]));
+    for (const [provider, hint] of [["stripe", "connections.renewHint"], ["gemini_vertex", "connections.vertexReauthorizeHint"], ["reddit", "connections.redditRenewHint"]]) {
+      for (const [expiry, state, message] of [[new Date(Date.now() + 3600_000).toISOString(), "saved", "connections.expiringHint"], ["2020-01-01T00:00:00Z", "expired", "connections.expiredHint"]]) {
+        const h = harness("app/connections/page.tsx", "ConnectionRow", [], {}, language);
+        const rendered = text(h.render({ item: { ...stripe, provider, saved_at: new Date().toISOString(), expires_at: expiry, storage_status: state }, onChanged: async () => {} }));
+        assert.ok(rendered.includes(h.messages[message]));
+        assert.ok(rendered.includes(h.messages[hint]));
+        assert.ok(rendered.includes(h.messages["connections.savedAt"].split("{time}")[0]));
+      }
+    }
+  }
+});
+
+test("Growth insufficient measurements never render zero score or risk band, while measured scores remain unchanged", () => {
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    for (const growth_score of [
+      { status: "insufficient_data", score: null, band: null },
+      { score: null, band: "at_risk" },
+      { status: "insufficient_data", score: 0, band: "at_risk" },
+    ]) {
+      const h = harness("app/dashboard/page.tsx", "LiveGrowth", readyState({ ...fixture, growth_score }), {}, language);
+      const view = h.render();
+      const metric = nodes(view).find((n) => n?.props?.className === "metric" && text(n).includes(h.messages["growth.live.score"]));
+      assert.equal(nodes(metric).find((n) => n?.type === "dd").props.children, "—");
+      assert.ok(text(metric).includes(h.messages["growth.live.insufficientData"]));
+      assert.ok(!text(metric).includes("/100"));
+      assert.ok(text(view).includes(h.messages["growth.live.insufficientDataHint"]));
+    }
+    const h = harness("app/dashboard/page.tsx", "LiveGrowth", readyState({ ...fixture, growth_score: { status: "available", score: 73, band: "promising" } }), {}, language);
+    assert.ok(text(h.render()).includes("73/100"));
+    assert.ok(!text(h.render()).includes(h.messages["growth.live.insufficientDataHint"]));
   }
 });
 

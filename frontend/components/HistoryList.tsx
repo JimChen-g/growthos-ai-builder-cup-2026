@@ -23,16 +23,27 @@ export function HistoryList({ history, title }: { history: IntelligenceHistory; 
         <h2>{title}</h2>
       </div>
       <ol className="rows">
-        {history.items.slice(0, 6).map((item) => (
-          <li key={item.snapshot.snapshot_id}>
-            <span className="index wide">{item.snapshot.score == null || !hasMeasurement(item.snapshot) ? "—" : asNumber(item.snapshot.score).toFixed(0)}</span>
-            <div className="row-main">
-              <strong>{item.snapshot.brand}</strong>
-              <small>{time.format(new Date(item.snapshot.generated_at))}</small>
-              <p>{hasMeasurement(item.snapshot) ? tx(item.snapshot.summary) : t("visibility.unavailable")}</p>
-            </div>
-          </li>
-        ))}
+        {history.items.slice(0, 6).map((item) => {
+          const isLiveFeedback = item.snapshot.kind === "customer_intelligence" && item.snapshot.mode === "live";
+          const liveFeedback = isLiveFeedback && "signals" in item.snapshot.result ? item.snapshot.result : null;
+          const count = liveFeedback?.analysis?.sample_count ?? liveFeedback?.signals.length;
+          return (
+            <li key={item.snapshot.snapshot_id}>
+              <span className="index wide">{isLiveFeedback ? count ?? "—" : item.snapshot.score == null || !hasMeasurement(item.snapshot) ? "—" : asNumber(item.snapshot.score).toFixed(0)}</span>
+              <div className="row-main">
+                <strong>{item.snapshot.brand}</strong>
+                <small>{time.format(new Date(item.snapshot.generated_at))}</small>
+                {isLiveFeedback ? <>
+                  <small>{t("customers.searchResults", { n: count ?? "—" })} · {t("customers.sourceBreakdown", {
+                    x: liveFeedback?.sources.find((source) => source.provider === "x")?.signal_count ?? "—",
+                    reddit: liveFeedback?.sources.find((source) => source.provider === "reddit")?.signal_count ?? "—",
+                  })}</small>
+                  <p>{t("customers.historyUnverified")}</p>
+                </> : <p>{hasMeasurement(item.snapshot) ? tx(item.snapshot.summary) : t("visibility.unavailable")}</p>}
+              </div>
+            </li>
+          );
+        })}
       </ol>
     </section>
   );

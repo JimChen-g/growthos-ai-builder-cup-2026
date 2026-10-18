@@ -1,5 +1,7 @@
 {
   "exact": {
+    "Read business data; growth score unavailable": "已读取业务数据；增长评分暂不可用",
+    "Connected sources were read successfully, but a revenue baseline or positive ad spend was missing. No growth score or risk band was assigned.": "已成功读取连接的数据源，但缺少收入基线或实际广告花费，因此未生成增长评分或风险等级。",
     "Monthly recurring revenue (MRR)": "月度经常性收入（MRR）",
     "Combined ad ROAS": "合并广告 ROAS",
     "Month-end subscription snapshot; no prior MRR comparison": "月末订阅快照，未提供上期 MRR 对比",
@@ -212,9 +214,11 @@
     "reasonGeo": "评估 {brand} 的 AI 可见度，寻找下一个搜索曝光机会；当前为 {score}/100。",
     "reasonFeedback": "整理客户洞察，主要问题是{problem}。",
     "reasonCollect": "读取 Reddit 和 X 上关于 {brand} 的公开讨论。",
+    "reasonCollectAvailable": "从可用来源检索关于 {brand} 的公开内容。",
     "reasonBaseline": "根据已连接的收入、营销效率、市场需求和执行能力，建立新的增长基线。",
     "actionMeasured": "测得增长评分 {score}/100",
     "reasonScan": "在已选的 AI 来源中评估 {brand}。",
+    "reasonScanAvailable": "在可用且已连接的 AI 来源中评估 {brand}。",
     "failure": "{text}。失败原因：{error}",
     "missingConfig": "实时模式缺少配置：{list}",
     "problemReason": "{problem}：{reason}"

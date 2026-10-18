@@ -16,7 +16,7 @@ import {
   type ConnectorProvider,
 } from "../../lib/api";
 import { type MessageKey, useI18n } from "../../lib/i18n";
-import { formatTimestamp, maskedWorkspace } from "../../lib/reporting";
+import { connectionExpiryWarning, formatTimestamp, maskedWorkspace } from "../../lib/reporting";
 
 const GROUPS: Array<{ title: MessageKey; hint: MessageKey; providers: ConnectorProvider[] }> = [
   { title: "connections.business", hint: "connections.businessHint", providers: ["stripe", "google_ads", "meta_ads"] },
@@ -107,6 +107,7 @@ export default function ConnectionsPage() {
       <p className="note">{t("connections.signedInAs", { email: identity?.email ?? t("connections.localIdentity") })} · {t("connections.workspace", { id: maskedWorkspace(session?.workspace_id ?? center.tenant_id) })}</p>
       <p className="note">{t("connections.privateHint")}</p>
       <p className="note">{t("connections.savedNotVerified")}</p>
+      <p className="note">{t("connections.retentionHint")}</p>
       <p className="note">{t("environment.hint")}</p>
       <p className="note">{t("connections.currencyHint")}</p>
       {GROUPS.map((group) => {
@@ -178,6 +179,7 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
   const [formEpoch, setFormEpoch] = useState(0);
   const locked = busy || refreshFailed;
   const validCurrency = /^[A-Z]{3}$/.test(currency);
+  const expiryWarning = connectionExpiryWarning(item.expires_at, item.storage_status);
   const linkedVertexIdentity = item.provider === "gemini_vertex" && item.configured
     && item.auth_method === "Enterprise connection · Linked project identity";
 
@@ -223,6 +225,10 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
         {linkedVertexIdentity && <small>{tx(item.auth_method)}</small>}
         <small>{t(`connections.storage.${item.storage_status ?? "unknown"}` as MessageKey)}</small>
         <small>{t("connections.savedAt", { time: formatTimestamp(item.saved_at, locale) })} · {t("connections.expiresAt", { time: formatTimestamp(item.expires_at, locale) })}</small>
+        {expiryWarning && <p className="note warn" role="status">
+          {t(expiryWarning === "expired" ? "connections.expiredHint" : "connections.expiringHint")}{" "}
+          {t(item.provider === "gemini_vertex" ? "connections.vertexReauthorizeHint" : item.provider === "reddit" ? "connections.redditRenewHint" : "connections.renewHint")}
+        </p>}
         {item.supports_live_test && !test && <small>{t("connections.notChecked")}</small>}
         {BUSINESS_PROVIDERS.includes(item.provider) && <small>{t("connections.selectedCurrency", { currency: item.currency ?? t("connections.currencyUnset") })}</small>}
         {BUSINESS_PROVIDERS.includes(item.provider) && <small>{t(`environment.${test?.account_environment ?? item.account_environment ?? "unknown"}` as MessageKey)}</small>}

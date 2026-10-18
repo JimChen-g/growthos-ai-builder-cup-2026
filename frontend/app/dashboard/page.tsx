@@ -211,6 +211,8 @@ function LiveGrowth() {
 
   const money = (value: number | string | null, currency: string) => formatMoney(value, currency, locale);
   const mrrWarnings = [...new Set(report?.revenue.mrr_warnings ?? [])];
+  const insufficientScore = report?.growth_score.status === "insufficient_data" || report?.growth_score.score == null;
+  const scoreText = report?.growth_score.score == null ? "—" : `${asNumber(report.growth_score.score).toFixed(0)}/100`;
 
   return (
     <main className="page">
@@ -240,8 +242,8 @@ function LiveGrowth() {
           <dl className="metrics">
             <div className="metric">
               <dt>{t("growth.live.score")}</dt>
-              <dd>{asNumber(report.growth_score.score).toFixed(0)}/100</dd>
-              <small>{t(`band.${report.growth_score.band}` as MessageKey)}</small>
+              <dd>{insufficientScore ? "—" : scoreText}</dd>
+              <small>{t(insufficientScore ? "growth.live.insufficientData" : `band.${report.growth_score.band}` as MessageKey)}</small>
             </div>
             <div className="metric">
               <dt>{t("growth.live.revenue")}</dt>
@@ -260,6 +262,7 @@ function LiveGrowth() {
               <small>{money(report.meta_ads.spend, report.meta_ads.currency)}</small>
             </div>
           </dl>
+          {insufficientScore && <p className="note warn" role="status">{t("growth.live.insufficientDataHint")}</p>}
           <p className="note">
             {error && <>{t("growth.live.previousReport")} </>}
             {t("growth.live.assumed")} ·{" "}

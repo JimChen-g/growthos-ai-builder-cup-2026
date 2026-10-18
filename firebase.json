@@ -3,6 +3,7 @@
     "rules": "firestore.rules"
   },
   "hosting": {
+    "predeploy": ["node \"$PROJECT_DIR/scripts/verify-hosting-build.cjs\""],
     "public": "frontend/out",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [

@@ -267,8 +267,10 @@ export type LiveGrowthIntelligence = {
     currency: string;
   };
   growth_score: {
-    score: NumberValue;
-    band: string;
+    status?: "available" | "insufficient_data";
+    score: NumberValue | null;
+    band: string | null;
+    missing_components?: string[];
   };
   generated_at: string;
 };

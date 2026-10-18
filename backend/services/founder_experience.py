@@ -101,6 +101,7 @@ class FounderExperienceService:
         # Re-read the run so an approval made in Agent Actions shows up on the dashboard
         # and briefing instead of the snapshot taken when the workflow started.
         current = await self._phase2_runtime.orchestrator.get(self._workflow.run_id)
+        current.report.growth_score.require_available()
         return current, self._feedback
 
     async def _build_briefing(

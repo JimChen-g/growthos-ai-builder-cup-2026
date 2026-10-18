@@ -89,6 +89,7 @@ from backend.services.growth_intelligence import (
     run_growth_intelligence,
     validate_live_configuration,
 )
+from backend.services.growth_score import InsufficientGrowthDataError
 from backend.services.intelligence_history import (
     FirestoreAuditLogService,
     FirestoreIntelligenceHistoryService,
@@ -215,6 +216,12 @@ def create_app(
                 ]
             },
         )
+
+    @app.exception_handler(InsufficientGrowthDataError)
+    async def insufficient_growth_data(
+        request: Request, error: InsufficientGrowthDataError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(error)})
 
     # Access control first so CORS (added last, outermost) also decorates 401/403 replies.
     install_access_control(app, app_settings)
@@ -596,14 +603,27 @@ def create_app(
             report = await run_growth_intelligence(selected_settings)
             if getattr(request.state, "principal", None) == FIREBASE_PRINCIPAL:
                 report = report.model_copy(update={"company": None})
+            score_available = report.growth_score.status == "available"
             try:
                 async with timeout(3):
                     await active_audit_log(request, DataMode.LIVE).record(
                         agent="Growth Intelligence Engine",
-                        action=f"Measured Growth Score {report.growth_score.score}/100",
+                        action=(
+                            f"Measured Growth Score {report.growth_score.score}/100"
+                            if score_available
+                            else "Read business data; growth score unavailable"
+                        ),
                         reason=(
-                            "Created a new growth baseline from connected revenue, "
-                            "marketing efficiency, market demand, and execution capability."
+                            (
+                                "Created a new growth baseline from connected revenue, "
+                                "marketing efficiency, market demand, and execution capability."
+                            )
+                            if score_available
+                            else (
+                                "Connected sources were read successfully, but a revenue baseline "
+                                "or positive ad spend was missing. No growth score or risk band "
+                                "was assigned."
+                            )
                         ),
                         status=AgentActionStatus.EXECUTED,
                     )

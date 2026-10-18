@@ -3,6 +3,8 @@
 import asyncio
 import json
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -1040,6 +1042,25 @@ class GeoPromptRunner:
         self.request_timeout_seconds = request_timeout_seconds
         self.total_timeout_seconds = total_timeout_seconds
         self._call_slots = asyncio.Semaphore(6)
+        self._tenant_call_slots: dict[str, tuple[asyncio.Semaphore, int]] = {}
+
+    @asynccontextmanager
+    async def _bounded_call(self, tenant_id: str) -> AsyncIterator[None]:
+        # The runner is shared by the app, not created for each request. Keep the
+        # process-wide cap, but leave capacity for another workspace even when
+        # one workspace submits several scans/checks. Count waiting users too;
+        # otherwise releasing an active call could create a second semaphore.
+        slots, users = self._tenant_call_slots.get(tenant_id, (asyncio.Semaphore(3), 0))
+        self._tenant_call_slots[tenant_id] = (slots, users + 1)
+        try:
+            async with slots, self._call_slots:
+                yield
+        finally:
+            _, users = self._tenant_call_slots[tenant_id]
+            if users == 1:
+                del self._tenant_call_slots[tenant_id]
+            else:
+                self._tenant_call_slots[tenant_id] = (slots, users - 1)
 
     async def scan(self, tenant_id: str, request: GeoScanRequest) -> GeoScanReport:
         deadline = monotonic() + self.total_timeout_seconds
@@ -1100,10 +1121,10 @@ class GeoPromptRunner:
                     success=False,
                     message="No server-side credential is configured.",
                 )
-            await self.quota.consume(tenant_id, provider)
             try:
                 async with asyncio.timeout(self.request_timeout_seconds):
-                    async with self._call_slots:
+                    async with self._bounded_call(tenant_id):
+                        await self.quota.consume(tenant_id, provider)
                         answer = await client.ask(
                             "Name one widely used customer support software product."
                         )
@@ -1154,14 +1175,33 @@ class GeoPromptRunner:
         provider_slots = asyncio.Semaphore(
             1 if provider is ConnectorProvider.PERPLEXITY else 3
         )
+        remaining_prompts = len(request.prompts)
 
         async def run_prompt(index: int, prompt: str) -> None:
+            nonlocal remaining_prompts
             started = monotonic()
             try:
-                async with provider_slots, self._call_slots:
-                    async with asyncio.timeout(self.request_timeout_seconds):
-                        await self.quota.consume(tenant_id, provider)
-                        raw = await client.ask(prompt)
+                async with provider_slots, self._bounded_call(tenant_id):
+                    remaining_seconds = deadline - monotonic()
+                    if remaining_seconds <= 0:
+                        raise TimeoutError
+                    # Serialized prompts share the remaining wall-clock budget,
+                    # so a slow first answer cannot consume all later attempts.
+                    # Queue time counts toward the scan deadline; completed fast
+                    # calls leave their unused time for the remaining prompts.
+                    prompt_budget = (
+                        remaining_seconds / remaining_prompts
+                        if provider is ConnectorProvider.PERPLEXITY
+                        else remaining_seconds
+                    )
+                    try:
+                        async with asyncio.timeout(
+                            min(self.request_timeout_seconds, prompt_budget)
+                        ):
+                            await self.quota.consume(tenant_id, provider)
+                            raw = await client.ask(prompt)
+                    finally:
+                        remaining_prompts -= 1
                 results[index] = _measured_result(
                     provider,
                     prompt,

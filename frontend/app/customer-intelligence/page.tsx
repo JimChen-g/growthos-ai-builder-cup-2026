@@ -46,7 +46,7 @@ function Insight({ analysis, commentsTitle, localizeSample = false, liveResults 
   liveResults?: boolean;
 }) {
   const { t, tx } = useI18n();
-  return (
+  const sentiment = (
     <>
       <section className="hero">
         <div className="hero-number">
@@ -67,7 +67,28 @@ function Insight({ analysis, commentsTitle, localizeSample = false, liveResults 
         <p className="eyebrow">{t("customers.suggestion")}</p>
         <p className="lead">{tx(analysis.recommendation)}</p>
       </section>
-
+    </>
+  );
+  return (
+    <>
+      {liveResults ? <>
+        <section className="hero">
+          <div className="hero-number"><span>{analysis.sample_count}</span><small>{t("customers.resultsUnit")}</small></div>
+          <div className="hero-copy">
+            <p className="eyebrow">{t("customers.liveComments")}</p>
+            <p className="lead">{t("customers.sourceBreakdown", {
+              x: analysis.source_counts?.x ?? analysis.analyzed_signals.filter((item) => item.source === "x").length,
+              reddit: analysis.source_counts?.reddit ?? analysis.analyzed_signals.filter((item) => item.source === "reddit").length,
+            })}</p>
+            <p className="note">{t("customers.heuristicHint")}</p>
+          </div>
+        </section>
+        <details>
+          <summary>{t("customers.heuristicDetails")}</summary>
+          <p className="note warn">{t("customers.heuristicHint")}</p>
+          {sentiment}
+        </details>
+      </> : sentiment}
       <section className="section">
         <div className="section-head">
           <h2>{commentsTitle}</h2>
@@ -76,12 +97,13 @@ function Insight({ analysis, commentsTitle, localizeSample = false, liveResults 
         <ul className="quotes">
           {analysis.analyzed_signals.map((item, index) => (
             <li key={`${item.source}-${index}`}>
-              <span className={`dot sentiment-${item.sentiment}`} title={tx(item.sentiment)} aria-hidden="true" />
+              <span className={`dot ${liveResults ? "" : `sentiment-${item.sentiment}`}`} title={liveResults ? undefined : tx(item.sentiment)} aria-hidden="true" />
               <blockquote>{localizeSample ? tx(item.text) : item.text}</blockquote>
               <small>
-                {item.source === "x" ? "X" : "Reddit"} · {tx(item.sentiment)}
-                {item.topics.length > 0 && ` · ${item.topics.map((topic) => tx(topic)).join("、")}`}
+                {item.source === "x" ? "X" : "Reddit"}
+                {!liveResults && <> · {tx(item.sentiment)}{item.topics.length > 0 && ` · ${item.topics.map((topic) => tx(topic)).join("、")}`}</>}
               </small>
+              {liveResults && <details><summary>{t("customers.heuristicDetails")}</summary><small>{tx(item.sentiment)}{item.topics.length > 0 && ` · ${item.topics.map((topic) => tx(topic)).join("、")}`}</small></details>}
             </li>
           ))}
         </ul>

@@ -241,6 +241,7 @@ class GrowthIntelligenceService:
             ads=[google_ads, meta_ads],
             market_demand=request.market_demand,
             execution_capability=request.execution_capability,
+            require_observed_data=mode is DataSourceMode.LIVE,
         )
         return GrowthIntelligenceReport(
             data_source_mode=mode,

@@ -215,6 +215,8 @@ class GrowthOrchestrator:
 
     async def resume(self, run_id: str, decision: ApprovalDecision) -> WorkflowRun:
         state = self._get_state(run_id)
+        # A stale or unavailable baseline must not reach an approval side effect.
+        state["report"].growth_score.require_available()
         approval = state["approval"]
         updated_approval = await self._approvals.decide(approval.approval_id, decision)
         resumed: OrchestratorState = {
@@ -256,6 +258,7 @@ class GrowthOrchestrator:
 
     async def _analyze(self, state: OrchestratorState) -> dict:
         report = state["report"]
+        report.growth_score.require_available()
         weakest = min(report.growth_score.components, key=report.growth_score.components.get)
         evidence = [
             f"Growth Score={report.growth_score.score}/100",

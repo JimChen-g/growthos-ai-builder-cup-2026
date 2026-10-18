@@ -19,6 +19,7 @@ import backend.api.app as api_app
 import backend.api.security as security
 import backend.services.growth_intelligence as growth
 from backend.config import Settings
+from backend.models.audit_log import AgentActionStatus
 from backend.models.connectors import ConnectorProvider, DataMode
 from backend.services.audit_log import AuditLogService
 from backend.services.phase2_runtime import build_demo_runtime
@@ -403,6 +404,8 @@ async def test_own_connections_flow_through_real_adapters_into_live_metrics(
     )
     assert Decimal(payload["growth_score"]["score"]) == Decimal("80.3")
     assert payload["growth_score"]["band"] == "strong"
+    assert payload["growth_score"]["status"] == "available"
+    assert payload["growth_score"]["missing_components"] == []
     assert ledger.json()["total"] == 1
     assert ledger.json()["entries"][0]["status"] == "executed"
     assert response.headers["Cache-Control"] == "private, no-store"
@@ -419,6 +422,72 @@ async def test_own_connections_flow_through_real_adapters_into_live_metrics(
         r for r in acceptance.fixtures.requests if r.url.host == "oauth2.googleapis.com"
     ]
     assert len(oauth_requests) == (1 if google_auth == "oauth" else 0)
+
+
+@pytest.mark.parametrize("empty_case, missing", [
+    ("ads", ["marketing_efficiency"]),
+    ("revenue_baseline", ["revenue_momentum"]),
+    ("all", ["revenue_momentum", "marketing_efficiency"]),
+])
+async def test_live_empty_data_is_not_a_risk_score_and_keeps_historical_audit(
+    acceptance, empty_case, missing
+):
+    original_handle = acceptance.fixtures.handle
+
+    def handle(request):
+        response = original_handle(request)
+        host, path = request.url.host, request.url.path
+        if empty_case in {"ads", "all"}:
+            if host == "googleads.googleapis.com" and path.endswith("googleAds:searchStream"):
+                return httpx.Response(200, json=[{"results": []}])
+            if host == "graph.facebook.com" and path.endswith("/insights"):
+                return httpx.Response(200, json={"data": []})
+        if host == "api.stripe.com":
+            if empty_case == "all":
+                return httpx.Response(200, json={"data": [], "has_more": False})
+            if empty_case == "revenue_baseline" and path == "/v1/charges":
+                month = datetime.fromtimestamp(int(request.url.params["created[gte]"]), UTC).month
+                if month != 1:
+                    return httpx.Response(200, json={"data": [], "has_more": False})
+        return response
+
+    acceptance.fixtures.handle = handle
+    async with client(acceptance) as api:
+        await save_accounts(api)
+        await api.get("/api/v1/audit-log?mode=live", headers=auth())
+        old = await acceptance.ledgers[workspace()].record(
+            agent="Growth Intelligence Engine", action="Measured Growth Score 39.5/100",
+            reason="Historical measurement before explicit availability gating.",
+            status=AgentActionStatus.EXECUTED,
+        )
+        response = await api.post("/api/v1/growth-intelligence/live", headers=auth())
+        ledger = await api.get("/api/v1/audit-log?mode=live", headers=auth())
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["data_source_mode"] == "live" and payload["company"] is None
+    assert payload["audit_recorded"] is True
+    result = payload["growth_score"]
+    assert result["status"] == "insufficient_data"
+    assert result["score"] is None and result["band"] is None
+    assert result["missing_components"] == missing
+    for component in missing:
+        assert result["components"][component] is None
+        assert result["contributions"][component] is None
+    if empty_case in {"ads", "all"}:
+        assert Decimal(payload["google_ads"]["spend"]) == 0
+        assert Decimal(payload["meta_ads"]["spend"]) == 0
+    if empty_case == "all":
+        assert Decimal(payload["revenue"]["revenue"]) == 0
+    entries = ledger.json()["entries"]
+    assert ledger.json()["total"] == 2
+    assert entries[0]["action"] == "Read business data; growth score unavailable"
+    assert entries[0]["status"] == "executed"
+    assert "No growth score or risk band was assigned." in entries[0]["reason"]
+    assert entries[1] == old.model_dump(mode="json")
+    assert "None/100" not in ledger.text and "null/100" not in ledger.text
+    for provider in PROVIDERS:
+        assert await acceptance.runtime.connections.quota.used(workspace(), provider) == 1
+    assert all(secret not in response.text + ledger.text for secret in SECRETS.values())
 
 
 @pytest.mark.parametrize("partial", [False, True])

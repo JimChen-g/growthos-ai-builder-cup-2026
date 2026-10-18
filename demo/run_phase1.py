@@ -8,9 +8,11 @@ from backend.config import Settings
 from backend.services.growth_intelligence import GrowthIntelligenceReport, run_growth_intelligence
 
 
-def display_decimal(value: Decimal) -> str:
+def display_decimal(value: Decimal | None) -> str:
     """Render exact decimal metrics without unnecessary trailing zeroes."""
 
+    if value is None:
+        return "Unavailable"
     rendered = format(value, "f")
     return rendered.rstrip("0").rstrip(".") if "." in rendered else rendered
 
@@ -19,22 +21,27 @@ def format_report(report: GrowthIntelligenceReport) -> str:
     """Render the compact acceptance output used by the Phase 1 demo."""
 
     components = report.growth_score.components
+    score = (
+        f"{display_decimal(report.growth_score.score)}/100"
+        if report.growth_score.status == "available" and report.growth_score.score is not None
+        else "Unavailable (insufficient data)"
+    )
     return "\n".join(
         [
             "Company:",
-            report.company.company_name,
+            report.company.company_name if report.company else "Not configured",
             "",
             "MRR:",
             f"{display_decimal(report.revenue.mrr)} {report.revenue.currency}",
             "",
             "Google Ads ROAS:",
-            display_decimal(report.google_ads.roas or Decimal("0")),
+            display_decimal(report.google_ads.roas),
             "",
             "Meta CAC:",
-            f"{display_decimal(report.meta_ads.cac or Decimal('0'))} {report.meta_ads.currency}",
+            f"{display_decimal(report.meta_ads.cac)} {report.meta_ads.currency}",
             "",
             "Growth Score:",
-            f"{display_decimal(report.growth_score.score)}/100",
+            score,
             "",
             "Revenue Momentum:",
             display_decimal(components["revenue_momentum"]),
