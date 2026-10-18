@@ -222,5 +222,19 @@ own credentials; they are covered only by controlled offline regression fixtures
   This does not change judge workspaces or automatically migrate other users' credentials.
 - Today briefing enrichment and the non-blocking popup COOP warning remain deferred by request.
 
-Release verification and real-provider outcomes are recorded after deployment; this section alone
-does not claim a successful provider read or an independently reconciled production report.
+Release verification: backend source `7487480` was built successfully by Cloud Build and published
+as `growthos-builder-cup-api-fix7487480`, with 100% default traffic. Firebase Hosting was republished
+and its API pin points to this revision. Frontend source `7f44d1f` additionally distinguishes known
+provider credential failures from an expired GrowthOS login using safe, localized messages.
+The dedicated runtime identity, CPU 1, memory 512 MiB, maximum instances 2, concurrency 20 and
+55-second timeout were preserved. Health/capabilities passed; unauthenticated Connections returns
+401 with `Cache-Control: private, no-store`.
+
+The final offline checks passed 365 backend tests, 47 frontend tests, Ruff, TypeScript and the
+production build. Online checks verified the authenticated nonempty workspace UI, credential
+lifecycle labels, honest test/unknown environment labels and Sample consistency across Today,
+Growth and the decision demonstration, including Simplified/Traditional Chinese evidence.
+This release does not claim complete three-source production reconciliation. Private account
+results and credentials are intentionally excluded from this public deployment record. A current
+provider token, suitable permissions and matching platform-side reporting conditions are still
+required for real-data acceptance. No advertising writes were invoked during acceptance.
