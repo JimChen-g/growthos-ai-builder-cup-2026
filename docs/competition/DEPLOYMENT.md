@@ -309,3 +309,57 @@ both passed.
 - Production builds now fail before emitting Hosting files when any required public Firebase
   identifier is absent. These identifiers are public Firebase client configuration, not provider
   credentials; business tokens and the connection-vault key remain server-side.
+
+### Unified Gemini and private Live acceptance, 2026-10-18
+
+Application source `d7f60250541f3d8553d847016c1e98fb4a13a6c9` includes the preceding login
+build correction, Gemini connection consolidation and the final provider-rate-limit handling.
+Cloud Build `c444a4ef-bf84-4bf0-bda2-20e423af509b` succeeded; Cloud Run revision
+`growthos-builder-cup-api-fixd7f6025` is ready with 100% default traffic. Hosting version
+`af9423a34d54a6bc` was released at `2026-10-18T11:04:13.104Z`, with its API tag
+`fh-af9423a34d54a6bc` pinned to that exact revision. All 69 application files matched the
+final production build's compressed hashes; Hosting also supplies two reserved Firebase
+initialization files. A CLI network interruption occurred after upload/finalization; the
+existing immutable version was verified and released without rebuilding or changing IAM.
+
+- Connections now has one logical Gemini source: AI Studio or Vertex AI is sufficient and
+  counts once. Switching forms does not mutate credentials. If both are configured, the
+  existing Visibility selection rule prefers Vertex AI. Three-language explanations and
+  connection counts were checked online.
+- With explicit approval, only the verified owner's private workspace can use the existing
+  runtime's Vertex identity. This requires a matching encrypted, expiring connection marker
+  and server-side workspace/project/location checks; disconnect, expiry or missing markers
+  cannot fall back to server credentials. Public configuration APIs cannot create this marker.
+  No local ADC was copied and no IAM permissions were added. Other users still configure
+  their own credentials.
+- Missing authorized AI connections were restored with encrypted create-only writes and
+  seven-day expiry. Existing Google Ads refresh credentials and existing social/search
+  connections were preserved. Credentials and private workspace identifiers are excluded
+  from this repository and the independent review source bundle.
+- Popup waiting is now bounded at 45 seconds, superseding the earlier 12-second behavior.
+  Slow login or timeout no longer forces redirect; only explicit popup-blocked or unsupported
+  errors use the redirect fallback. Existing authenticated-session refresh passed online;
+  a fresh interactive OAuth flow was not repeated in this acceptance run.
+- Eight real connection checks passed. Today and Connections loaded without errors; Growth
+  read all three connected business sources with no Sample fallback. Stripe and Google Ads
+  are test environments; Meta's environment remains unconfirmed. This proves real API paths,
+  not production financial reconciliation or independently verified platform amounts.
+- The first three-provider scan completed 7/9 answers: Perplexity returned usage-limit errors
+  for two concurrent questions. Perplexity prompts are now serialized within each scan,
+  without automatic retries, quota increases or longer deadlines. Safe allowlisted errors
+  have localized explanations; arbitrary provider errors are not exposed.
+- The final scan at `2026-10-18T11:06:01.501392Z` completed **9/9** answers: OpenAI 3/3,
+  Gemini Vertex 3/3 and Perplexity 3/3. Gemini was called through one provider only. This
+  observed success does not guarantee future provider availability or immunity to limits.
+- X and Reddit each returned ten public keyword-search results in a bounded read-only check.
+  The UI now clearly labels these as public search excerpts, not verified customer feedback;
+  same-name matches and sentiment relevance require manual review. No new disambiguation
+  algorithm or accuracy claim is included.
+
+Release checks passed: **430 backend tests**, **69 frontend tests**, Ruff, TypeScript,
+production build and the [GitHub CI run](https://github.com/JimChen-g/growthos-ai-builder-cup-2026/actions/runs/39120377563).
+Capabilities returned 200 and unauthenticated Connections returned 401 after release.
+Runtime identity, secret references, CPU 1, memory 512 MiB, max instances 2, concurrency 20
+and 55-second timeout were preserved. No advertising mutations were invoked. Today briefing
+enrichment, COOP warning cleanup, fresh-browser OAuth acceptance and independent platform
+reconciliation remain explicitly outside this completed release's verified claims.
