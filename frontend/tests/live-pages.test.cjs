@@ -21,6 +21,7 @@ function harness(file, name, initial = [], api = {}, language = "en") {
   let cursor = 0;
   const exports = {};
   const messages = require(path.join(frontend, `lib/i18n/ui.${language}.json`));
+  const serverMessages = language === "en" ? {} : require(path.join(frontend, `lib/i18n/server.${language}.json`)).exact;
   const t = (key, args = {}) => Object.entries(args).reduce((value, [k, v]) => value.replaceAll(`{${k}}`, String(v)), messages[key] ?? key);
   const source = ts.transpileModule(fs.readFileSync(path.join(frontend, file), "utf8") + `\nexport { ${name} as TestedComponent };`, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
@@ -36,14 +37,16 @@ function harness(file, name, initial = [], api = {}, language = "en") {
           return [state[at], (next) => { state[at] = typeof next === "function" ? next(state[at]) : next; }];
         },
         useEffect(callback) { effects.push(callback); },
+        useMemo(callback) { return callback(); },
       };
       if (id === "next/link") return { default: "a" };
-      if (id.endsWith("/i18n")) return { useI18n: () => ({ t, tx: (v) => v, locale: language === "en" ? "en-US" : language, lang: language }) };
+      if (id.endsWith("/i18n")) return { useI18n: () => ({ t, tx: (v) => serverMessages[v] ?? v, locale: language === "en" ? "en-US" : language, lang: language }) };
       if (id.endsWith("/DataModeContext")) return { useDataMode: () => ({ mode: "live", identity: { email: "judge@example.test" }, session: { workspace_id: "0123456789abcdef0123456789abcdef" }, capabilities: { public_demo_only: true, live_self_service_enabled: true } }) };
       if (id.endsWith("/reporting")) return reporting;
       if (id.endsWith("/api")) return { asNumber: Number, ApiError, ...api };
       if (id.endsWith("/PageState")) return { PageState: "page-state" };
       if (id.endsWith("/ActionLedger")) return { ActionLedger: "ledger", StatusPill: "pill" };
+      if (id.endsWith("/HistoryList")) return { HistoryList: "history-list" };
       if (id.endsWith("/Segmented")) return { Segmented: "segmented" };
       throw new Error(`Unexpected import ${id}`);
     },
@@ -181,6 +184,144 @@ test("Growth translates known provider credential failures without exposing raw 
 const stripe = { provider: "stripe", state: "needs_configuration", display_name: "Stripe", setup_label: "", note: "", setup_steps: [], accounts: [], configured: false, supports_live_test: true, currency: "CNY" };
 const rowState = (currency = "CNY") => ["rk_test", {}, {}, false, "", null, false, currency, 0];
 const submit = (view) => nodes(view).find((n) => n?.type === "form").props.onSubmit({ preventDefault() {} });
+
+const aiConnections = (configured = []) => ["openai", "gemini", "gemini_vertex", "perplexity"].map((provider) => ({
+  ...stripe, provider, display_name: provider, currency: null,
+  configured: configured.includes(provider), state: configured.includes(provider) ? "connected" : "needs_configuration",
+}));
+
+test("AI visibility connections count OpenAI, Gemini and Perplexity once, with either Gemini method sufficient", () => {
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    for (const [configured, expected] of [
+      [[], 0], [["gemini"], 1], [["gemini_vertex"], 1], [["gemini", "gemini_vertex"], 1],
+      [["openai", "gemini", "perplexity"], 3], [["openai", "gemini_vertex", "perplexity"], 3],
+      [["openai", "gemini", "gemini_vertex", "perplexity"], 3],
+    ]) {
+      const h = harness("app/connections/page.tsx", "ConnectionsPage", [{ tenant_id: "test-workspace", connections: aiConnections(configured) }, null], {}, language);
+      const section = nodes(h.render()).find((n) => n?.type === "section" && nodes(n).some((child) => child?.type === "h2" && text(child) === h.messages["connections.ai"]));
+      assert.ok(text(section).includes(h.messages["connections.ready"].replace("{n}", String(expected)).replace("{total}", "3")), `${language}: ${configured}`);
+      assert.equal(nodes(section).filter((n) => n?.type?.name === "GeminiConnectionRow").length, 1);
+      assert.equal(nodes(section).filter((n) => n?.type?.name === "ConnectionRow").length, 2);
+    }
+  }
+});
+
+test("Gemini opens an already configured method and switching settings cannot alter saved credentials", () => {
+  for (const [configured, expected] of [[[], "gemini"], [["gemini"], "gemini"], [["gemini_vertex"], "gemini_vertex"], [["gemini", "gemini_vertex"], "gemini_vertex"]]) {
+    const items = aiConnections(configured).filter((item) => ["gemini", "gemini_vertex"].includes(item.provider));
+    const before = JSON.stringify(items);
+    const h = harness("app/connections/page.tsx", "GeminiConnectionRow", [], {
+      requestJson: () => assert.fail("choosing a Gemini settings form must not send a request"),
+    });
+    const props = { items, onChanged: () => assert.fail("switching method must not save or refresh") };
+    let view = h.render(props);
+    const selector = nodes(view).find((n) => n?.type === "select");
+    assert.equal(selector.props.value, expected);
+    const other = expected === "gemini" ? "gemini_vertex" : "gemini";
+    selector.props.onChange({ target: { value: other } });
+    view = h.render(props);
+    const row = nodes(view).find((n) => n?.type?.name === "ConnectionRow");
+    assert.equal(row.props.item.provider, other);
+    assert.equal(row.key, other, "separate form instances cannot leak draft credentials between methods");
+    assert.equal(JSON.stringify(items), before);
+  }
+});
+
+test("Gemini checks and disconnects only the selected saved method", async () => {
+  for (const provider of ["gemini", "gemini_vertex"]) {
+    const requests = [];
+    const h = harness("app/connections/page.tsx", "ConnectionRow", [], {
+      requestJson: async (pathname, init) => { requests.push({ pathname, method: init.method }); return { success: true, checked_live: true }; },
+    });
+    const item = aiConnections(["gemini", "gemini_vertex"]).find((connection) => connection.provider === provider);
+    const props = { item, onChanged: async () => {} };
+    const check = nodes(h.render(props)).find((n) => n?.type === "button" && n.props.children === h.messages["connections.test"]);
+    await check.props.onClick(); await tick();
+    const disconnect = nodes(h.render(props)).find((n) => n?.type === "button" && n.props.children === h.messages["connections.disconnect"]);
+    disconnect.props.onClick(); await tick();
+    assert.deepEqual(requests, [
+      { pathname: `/api/v1/connections/${provider}/test`, method: "POST" },
+      { pathname: `/api/v1/connections/${provider}`, method: "DELETE" },
+    ]);
+  }
+});
+
+test("Gemini alternative setup and routing explanations are available in every language", () => {
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    const h = harness("app/connections/page.tsx", "GeminiConnectionRow", [], {}, language);
+    const view = h.render({ items: aiConnections(["gemini_vertex"]).filter((item) => ["gemini", "gemini_vertex"].includes(item.provider)), onChanged: async () => {} });
+    for (const key of ["connections.geminiMethod", "connections.geminiAiStudio", "connections.geminiVertex", "connections.geminiAlternativesHint", "connections.geminiRoutingHint"]) {
+      assert.ok(h.messages[key], `${language}: ${key}`);
+      assert.ok(text(view).includes(h.messages[key]));
+    }
+  }
+});
+
+const linkedVertex = {
+  ...stripe, provider: "gemini_vertex", display_name: "Gemini · Vertex AI", configured: true, state: "connected",
+  auth_method: "Enterprise connection · Linked project identity", configuration_source: "tenant_vault",
+  project_id: "test-project", location: "global", currency: null,
+  setup_steps: ["Runtime identity linked to this workspace", "Test Google Search grounding", "Disconnect to revoke workspace access"],
+};
+
+test("linked Vertex runtime identity needs no API key to check and shows localized replacement-only guidance", async () => {
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    const requests = [];
+    const h = harness("app/connections/page.tsx", "ConnectionRow", [], {
+      requestJson: async (pathname, init) => { requests.push({ pathname, method: init.method }); return { success: true, checked_live: true }; },
+    }, language);
+    const props = { item: linkedVertex, onChanged: async () => {} };
+    const view = h.render(props);
+    for (const key of ["connections.vertexLinkedHint", "connections.vertexReplacementKey", "connections.vertexReplace"]) assert.ok(text(view).includes(h.messages[key]));
+    assert.ok(!text(view).includes(h.messages["connections.vertexKey"]));
+    const server = language === "en" ? {} : require(path.join(frontend, `lib/i18n/server.${language}.json`)).exact;
+    for (const source of [linkedVertex.auth_method, ...linkedVertex.setup_steps]) {
+      if (language !== "en") assert.ok(server[source], `${language}: ${source}`);
+      assert.ok(text(view).includes(server[source] ?? source));
+    }
+    const replace = nodes(view).find((n) => n?.type === "button" && n.props.type === "submit");
+    assert.equal(replace.props.disabled, true, "empty replacement key must not overwrite linked identity");
+    submit(view); await tick();
+    assert.equal(requests.length, 0);
+    const check = nodes(view).find((n) => n?.type === "button" && n.props.children === h.messages["connections.test"]);
+    assert.equal(check.props.disabled, false);
+    await check.props.onClick(); await tick();
+    assert.deepEqual(requests, [{ pathname: "/api/v1/connections/gemini_vertex/test", method: "POST" }]);
+  }
+});
+
+test("linked Vertex identity can be explicitly replaced with an API key without editing other Gemini credentials", async () => {
+  const requests = [];
+  const initial = rowState("");
+  initial[1] = { projectId: "replacement-project", location: "global", apiKey: " synthetic-key " };
+  const h = harness("app/connections/page.tsx", "ConnectionRow", initial, {
+    requestJson: async (pathname, init) => { requests.push({ pathname, method: init.method, body: JSON.parse(init.body) }); return {}; },
+  });
+  const view = h.render({ item: linkedVertex, onChanged: async () => {} });
+  assert.equal(nodes(view).find((n) => n?.type === "button" && n.props.type === "submit").props.disabled, false);
+  submit(view); await tick();
+  assert.deepEqual(requests, [{ pathname: "/api/v1/connections/gemini_vertex/config", method: "PUT", body: {
+    project_id: "replacement-project", location: "global", api_key: "synthetic-key",
+  } }]);
+  assert.equal(h.state[1].apiKey, "");
+});
+
+test("Visibility requests exactly one Gemini source using the established configured-method priority", async () => {
+  for (const [configured, expected] of [
+    [["openai", "gemini", "perplexity"], ["openai", "gemini", "perplexity"]],
+    [["openai", "gemini_vertex", "perplexity"], ["openai", "gemini_vertex", "perplexity"]],
+    [["openai", "gemini", "gemini_vertex", "perplexity"], ["openai", "gemini_vertex", "perplexity"]],
+  ]) {
+    let body;
+    const h = harness("app/visibility/page.tsx", "LiveVisibility", [{ connections: aiConnections(configured) }, null, "Test brand", "https://example.test", "Test category", "", null, false, ""], {
+      requestJson: async (_pathname, init) => { body = JSON.parse(init.body); return { providers: [], results: [] }; },
+      getJson: async () => ({ entries: [] }),
+    });
+    submit(h.render()); await tick();
+    assert.deepEqual(body.providers, expected);
+    assert.equal(body.mode, "live");
+  }
+});
 
 test("Connections awaits metadata refresh, clears saved key, and retries failed status without replaying mutation", async () => {
   const requests = []; let refreshes = 0; let finishRefresh;

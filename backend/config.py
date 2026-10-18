@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     vertex_ai_project_id: str | None = None
     vertex_ai_location: str = "global"
     vertex_ai_api_key: SecretStr | None = None
+    # Server-only opt-in for one verified owner's disconnectable, seven-day vault link.
+    # This is not a generic hosted ADC fallback and cannot be set through the public API.
+    live_vertex_runtime_workspace_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     # Gemini 2.5 Flash reached its published retirement date on 2026-10-16. The competition
     # candidate is a currently GA global model; deployment still requires a real project call.
     vertex_ai_model: str = "gemini-3.7-flash"
@@ -147,3 +150,8 @@ class Settings(BaseSettings):
         """Allow optional numeric values to remain blank in `.env`."""
 
         return None if value == "" else value
+
+    @field_validator("live_vertex_runtime_workspace_id", mode="before")
+    @classmethod
+    def empty_runtime_workspace_is_none(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value

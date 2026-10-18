@@ -8,7 +8,7 @@ let signInPromise: Promise<User> | null = null;
 let identityEpoch = 0;
 let identityChanging = false;
 let interactiveAttempt = 0;
-const POPUP_WAIT_MS = 12000;
+const POPUP_WAIT_MS = 45000;
 
 function authErrorCode(error: unknown): string {
   if (!error || typeof error !== "object" || !("code" in error)) return "";
@@ -19,8 +19,7 @@ function shouldUseRedirect(error: unknown): boolean {
   const code = authErrorCode(error);
   return code === "auth/popup-blocked"
     || code === "auth/operation-not-supported-in-this-environment"
-    || code === "auth/web-storage-unsupported"
-    || code === "auth/popup-timeout";
+    || code === "auth/web-storage-unsupported";
 }
 
 function configuredApp(): FirebaseApp | null {
@@ -77,8 +76,8 @@ export async function signInWithGoogle(): Promise<void> {
       ]);
     } catch (error) {
       if (!shouldUseRedirect(error)) throw error;
-      // Popup-blocking and embedded-browser restrictions are common. A full-page
-      // redirect preserves the same Firebase identity and returns to this route.
+      // Redirect only when Firebase explicitly reports an unsupported popup.
+      // A slow account selection or MFA flow must never navigate the page away.
       await signInWithRedirect(auth, provider);
     }
   } finally {

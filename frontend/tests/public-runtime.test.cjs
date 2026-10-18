@@ -98,7 +98,7 @@ test("Live token comes from the formal user and is discarded if identity changes
   await assert.rejects(getToken(true, true), /identity-changing/);
 });
 
-test("Google popup opens in the click gesture and unsupported popups fall back to redirect", async () => {
+test("Google popup timeout preserves the page and unlocks retry without forcing redirect", async () => {
   const timers = [];
   const popups = [];
   let redirects = 0;
@@ -113,12 +113,12 @@ test("Google popup opens in the click gesture and unsupported popups fall back t
   });
   const first = module.signInWithGoogle();
   assert.equal(popups.length, 1, "popup must open synchronously before any await");
-  assert.equal(timers[0].delay, 12000);
+  assert.equal(timers[0].delay, 45000);
   await assert.rejects(module(), /identity-changing/);
   timers[0].callback();
-  await first;
-  assert.equal(redirects, 1);
-  assert.equal(await module(), "anon-token", "a blocked popup must not hold the identity lock forever");
+  await assert.rejects(first, /popup-timeout/);
+  assert.equal(redirects, 0, "slow account selection or MFA must not force navigation");
+  assert.equal(await module(), "anon-token", "a timed-out popup must not hold the identity lock forever");
   const retry = module.signInWithGoogle();
   assert.equal(popups.length, 2);
   popups[0]({ user: auth.currentUser });
@@ -127,6 +127,21 @@ test("Google popup opens in the click gesture and unsupported popups fall back t
   popups[1]({ user: auth.currentUser });
   await retry;
   assert.equal(await module(), "anon-token");
+});
+
+test("explicitly blocked or unsupported Google popups still use redirect fallback", async () => {
+  for (const code of ["auth/popup-blocked", "auth/operation-not-supported-in-this-environment", "auth/web-storage-unsupported"]) {
+    let redirects = 0;
+    const auth = { currentUser: { uid: "anonymous", isAnonymous: true }, authStateReady: async () => {} };
+    const module = loadAuth(auth, () => assert.fail("no anonymous sign-in needed"), {
+      firebase: {
+        signInWithPopup: async () => { throw Object.assign(new Error(code), { code }); },
+        signInWithRedirect: async (selectedAuth) => { assert.equal(selectedAuth, auth); redirects += 1; },
+      },
+    });
+    await module.signInWithGoogle();
+    assert.equal(redirects, 1, code);
+  }
 });
 
 test("Google popup cancellation remains a user-visible error and does not force redirect", async () => {

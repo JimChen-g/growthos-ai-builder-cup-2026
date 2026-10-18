@@ -46,6 +46,12 @@ jobs:
       - run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: "1"
+          # Synthetic public config for build validation only; CI never deploys this artifact.
+          # No production Firebase project or business credential is used by this job.
+          NEXT_PUBLIC_FIREBASE_API_KEY: "ci-placeholder-not-a-real-api-key"
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: "growthos-ci.invalid"
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: "growthos-ci-fixture"
+          NEXT_PUBLIC_FIREBASE_APP_ID: "1:000000000000:web:ci-fixture"
       - run: npm audit --omit=dev --audit-level=high
 
   contract:

@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from time import monotonic
 from urllib.parse import urlparse
@@ -88,6 +89,7 @@ class ResolvedVertexAIConnection:
     location: str
     api_key: SecretStr | None
     source: str
+    runtime_identity: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +180,8 @@ class ConnectorCredentialResolver:
         if stored:
             try:
                 payload = json.loads(stored.get_secret_value())
+                if not isinstance(payload, dict):
+                    raise ValueError("invalid configuration")
                 project_id = str(payload["project_id"])
                 location = str(payload.get("location") or "global")
                 api_key_value = payload.get("api_key")
@@ -185,6 +189,16 @@ class ConnectorCredentialResolver:
                 raise CredentialVaultError(
                     "stored Vertex AI connection configuration is invalid"
                 ) from error
+            if "auth_mode" in payload:
+                if not await self._allows_linked_vertex_runtime(tenant_id, payload):
+                    return None
+                return ResolvedVertexAIConnection(
+                    project_id=project_id,
+                    location=location,
+                    api_key=None,
+                    source="encrypted_vault",
+                    runtime_identity=True,
+                )
             if not api_key_value and not self.allows_server_credentials(tenant_id):
                 return None
             return ResolvedVertexAIConnection(
@@ -200,6 +214,51 @@ class ConnectorCredentialResolver:
             location=self.settings.vertex_ai_location,
             api_key=self.settings.vertex_ai_api_key,
             source="server_environment",
+        )
+
+    async def _allows_linked_vertex_runtime(self, tenant_id: str, payload: dict) -> bool:
+        """Authorize only an administrator-created, expiring link for one hosted owner.
+
+        Neither an environment opt-in alone nor a public project-only connection can
+        grant runtime credentials. The encrypted marker and its lifecycle must both exist.
+        """
+        settings = self.settings
+        if not (
+            settings.firebase_auth_required
+            and settings.live_self_service_enabled
+            and settings.live_storage_backend == "firestore"
+            and self.vault.enabled
+            and settings.live_vertex_runtime_workspace_id
+            and tenant_id == settings.live_vertex_runtime_workspace_id
+            and settings.firebase_project_id
+            and settings.vertex_ai_project_id == settings.firebase_project_id
+            and payload.get("auth_mode") == "runtime_identity"
+            and payload.get("project_id") == settings.vertex_ai_project_id
+            and payload.get("location") == settings.vertex_ai_location
+            and payload.get("api_key") is None
+            and set(payload) <= {"auth_mode", "project_id", "location", "api_key"}
+        ):
+            return False
+        metadata = getattr(self.vault, "metadata", None)
+        if metadata is None:
+            return False
+        lifecycle = await metadata(tenant_id, ConnectorProvider.GEMINI_VERTEX)
+        saved_at, expires_at = lifecycle.saved_at, lifecycle.expires_at
+        if not (
+            lifecycle.storage_status == "saved"
+            and isinstance(saved_at, datetime)
+            and isinstance(expires_at, datetime)
+            and saved_at.tzinfo is not None
+            and expires_at.tzinfo is not None
+        ):
+            return False
+        now = datetime.now(UTC)
+        # Firestore writes calculate the two timestamps separately; allow subsecond
+        # recording drift, but never authorize beyond seven days from the saved time.
+        seven_day_limit = saved_at + timedelta(days=7)
+        return (
+            saved_at <= now < min(expires_at, seven_day_limit)
+            and expires_at <= seven_day_limit + timedelta(seconds=1)
         )
 
     async def meta_connection(self, tenant_id: str) -> ResolvedMetaAdsConnection | None:
@@ -757,6 +816,7 @@ class ConnectionCenterService:
     async def _vertex_status(self, tenant_id: str) -> ConnectionStatus:
         connection = await self.resolver.vertex_connection(tenant_id)
         configured = connection is not None
+        runtime_identity = bool(connection and connection.runtime_identity)
         allows_adc = self.resolver.allows_server_credentials(tenant_id)
         uses_api_key = bool(connection and connection.api_key) or not allows_adc
         return ConnectionStatus(
@@ -768,6 +828,9 @@ class ConnectionCenterService:
             ),
             configured=configured,
             auth_method=(
+                "Enterprise connection · Linked project identity"
+                if runtime_identity
+                else
                 "Enterprise connection · Project + API key"
                 if uses_api_key
                 else "Enterprise connection · Project + ADC"
@@ -779,6 +842,10 @@ class ConnectionCenterService:
             setup_kind=ConnectionSetupKind.CLOUD_PROJECT,
             setup_label="Connect one Google Cloud project",
             setup_steps=[
+                "Runtime identity linked to this workspace",
+                "Test Google Search grounding",
+                "Disconnect to revoke workspace access",
+            ] if runtime_identity else [
                 "Enter the project ID",
                 "Use server ADC or paste one API key"
                 if allows_adc

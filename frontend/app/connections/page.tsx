@@ -20,11 +20,20 @@ import { formatTimestamp, maskedWorkspace } from "../../lib/reporting";
 
 const GROUPS: Array<{ title: MessageKey; hint: MessageKey; providers: ConnectorProvider[] }> = [
   { title: "connections.business", hint: "connections.businessHint", providers: ["stripe", "google_ads", "meta_ads"] },
-  { title: "connections.ai", hint: "connections.aiHint", providers: ["openai", "gemini", "gemini_vertex", "perplexity"] },
+  { title: "connections.ai", hint: "connections.aiHint", providers: ["openai", "gemini", "perplexity"] },
   { title: "connections.voice", hint: "connections.voiceHint", providers: ["x", "reddit"] },
 ];
 const KEY_PROVIDERS: ConnectorProvider[] = ["stripe", "openai", "gemini", "perplexity", "x"];
 const BUSINESS_PROVIDERS: ConnectorProvider[] = ["stripe", "google_ads", "meta_ads"];
+const GEMINI_PROVIDERS: ConnectorProvider[] = ["gemini", "gemini_vertex"];
+
+function preferredGemini(items: ConnectionStatus[]): ConnectionStatus | undefined {
+  // Match Visibility's established routing: Vertex first when both are configured.
+  return items.find((item) => item.provider === "gemini_vertex" && item.configured)
+    ?? items.find((item) => item.provider === "gemini" && item.configured)
+    ?? items.find((item) => item.provider === "gemini")
+    ?? items.find((item) => item.provider === "gemini_vertex");
+}
 
 function connectionError(caught: unknown): MessageKey {
   if (caught instanceof ApiError) {
@@ -102,7 +111,7 @@ export default function ConnectionsPage() {
       <p className="note">{t("connections.currencyHint")}</p>
       {GROUPS.map((group) => {
         const items = group.providers
-          .map((provider) => center.connections.find((item) => item.provider === provider))
+          .map((provider) => provider === "gemini" ? preferredGemini(center.connections) : center.connections.find((item) => item.provider === provider))
           .filter((item): item is ConnectionStatus => Boolean(item));
         const ready = items.filter((item) => item.configured).length;
         return (
@@ -115,15 +124,44 @@ export default function ConnectionsPage() {
               <span className="muted">{t("connections.ready", { n: ready, total: items.length })}</span>
             </div>
             <ul className="rows">
-              {items.map((item) => (
-                <ConnectionRow item={item} key={item.provider} onChanged={refresh} />
-              ))}
+              {items.map((item) => GEMINI_PROVIDERS.includes(item.provider)
+                ? <GeminiConnectionRow items={center.connections.filter((connection) => GEMINI_PROVIDERS.includes(connection.provider))} key="gemini" onChanged={refresh} />
+                : <ConnectionRow item={item} key={item.provider} onChanged={refresh} />)}
             </ul>
           </section>
         );
       })}
     </main>
   );
+}
+
+function GeminiConnectionRow({ items, onChanged }: { items: ConnectionStatus[]; onChanged: () => Promise<void> }) {
+  const { t } = useI18n();
+  const preferred = preferredGemini(items);
+  const [method, setMethod] = useState<ConnectorProvider>(preferred?.provider ?? "gemini");
+  const selected = items.find((item) => item.provider === method) ?? preferred;
+  const configured = items.some((item) => item.configured);
+  if (!selected) return null;
+  return <li className="connection">
+    <span className={`dot ${configured ? "ok" : ""}`} aria-hidden="true" />
+    <div className="row-main">
+      <strong>Gemini</strong>
+      <small>{t(configured ? "connections.connected" : "connections.needsSetup")}</small>
+      <p className="note">{t("connections.geminiAlternativesHint")}</p>
+      <label className="field">
+        <span>{t("connections.geminiMethod")}</span>
+        <select id="gemini-method" value={selected.provider} onChange={(event) => setMethod(event.target.value as ConnectorProvider)}>
+          {items.map((item) => <option key={item.provider} value={item.provider}>
+            {t(item.provider === "gemini_vertex" ? "connections.geminiVertex" : "connections.geminiAiStudio")} · {t(item.configured ? "connections.connected" : "connections.needsSetup")}
+          </option>)}
+        </select>
+      </label>
+      <p className="note">{t("connections.geminiRoutingHint")}</p>
+      <ul className="rows">
+        <ConnectionRow item={selected} key={selected.provider} onChanged={onChanged} />
+      </ul>
+    </div>
+  </li>;
 }
 
 function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged: () => Promise<void> }) {
@@ -140,6 +178,8 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
   const [formEpoch, setFormEpoch] = useState(0);
   const locked = busy || refreshFailed;
   const validCurrency = /^[A-Z]{3}$/.test(currency);
+  const linkedVertexIdentity = item.provider === "gemini_vertex" && item.configured
+    && item.auth_method === "Enterprise connection · Linked project identity";
 
   const state = item.state === "connected" ? "connected" : item.state === "fallback_ready" ? "available" : "needsSetup";
   const stateLabel: Record<string, MessageKey> = {
@@ -180,6 +220,7 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
       <div className="row-main">
         <strong>{item.display_name}</strong>
         <small>{t(stateLabel[state])} · {tx(item.setup_label)}</small>
+        {linkedVertexIdentity && <small>{tx(item.auth_method)}</small>}
         <small>{t(`connections.storage.${item.storage_status ?? "unknown"}` as MessageKey)}</small>
         <small>{t("connections.savedAt", { time: formatTimestamp(item.saved_at, locale) })} · {t("connections.expiresAt", { time: formatTimestamp(item.expires_at, locale) })}</small>
         {item.supports_live_test && !test && <small>{t("connections.notChecked")}</small>}
@@ -221,6 +262,7 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
               className="stack-form"
               onSubmit={(event) => {
                 event.preventDefault();
+                if (locked || !vertex.projectId.trim() || ((capabilities.live_self_service_enabled || linkedVertexIdentity) && !vertex.apiKey.trim())) return;
                 act(
                   () =>
                     requestJson("/api/v1/connections/gemini_vertex/config", {
@@ -235,10 +277,11 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
                 ).then((saved) => { if (saved) setVertex((current) => ({ ...current, apiKey: "" })); });
               }}
             >
+              {linkedVertexIdentity && <p className="note" role="status">{t("connections.vertexLinkedHint")}</p>}
               <label className="field"><span>{t("connections.projectId")}</span><input disabled={locked} id="vertex-project" onChange={(e) => setVertex({ ...vertex, projectId: e.target.value })} value={vertex.projectId} /></label>
               <label className="field"><span>{t("connections.location")}</span><input disabled={locked} id="vertex-location" onChange={(e) => setVertex({ ...vertex, location: e.target.value })} value={vertex.location} /></label>
-              <label className="field"><span>{t(capabilities.live_self_service_enabled ? "connections.vertexKey" : "connections.optionalKey")}</span><input autoComplete="new-password" disabled={locked} id="vertex-key" onChange={(e) => setVertex({ ...vertex, apiKey: e.target.value })} type="password" value={vertex.apiKey} /></label>
-              <button className="button quiet" disabled={locked || !vertex.projectId.trim() || (capabilities.live_self_service_enabled && !vertex.apiKey.trim())} type="submit">{t("connections.save")}</button>
+              <label className="field"><span>{t(linkedVertexIdentity ? "connections.vertexReplacementKey" : capabilities.live_self_service_enabled ? "connections.vertexKey" : "connections.optionalKey")}</span><input autoComplete="new-password" disabled={locked} id="vertex-key" onChange={(e) => setVertex({ ...vertex, apiKey: e.target.value })} type="password" value={vertex.apiKey} /></label>
+              <button className="button quiet" disabled={locked || !vertex.projectId.trim() || ((capabilities.live_self_service_enabled || linkedVertexIdentity) && !vertex.apiKey.trim())} type="submit">{t(linkedVertexIdentity ? "connections.vertexReplace" : "connections.save")}</button>
             </form>
           )}
 
