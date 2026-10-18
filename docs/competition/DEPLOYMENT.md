@@ -271,3 +271,24 @@ Health/capabilities passed and unauthenticated Connections remained protected (4
 The authenticated public Connections page loaded successfully; its new backend setup step and
 optional-token form were verified in English, Simplified Chinese and Traditional Chinese.
 No production credential form was submitted or existing credential rewritten during verification.
+
+### Google Ads connection failure classification, 2026-10-18
+
+- The owner's post-migration check changed from HTTP 401 before resaving OAuth credentials to HTTP
+  403 after resaving them. This establishes that the new refresh flow reached Google Ads, but does
+  not by itself distinguish account permission, manager hierarchy or newly approved project access.
+- Provider handling now records only an allowlisted Google Ads error enum and operation stage. It
+  never retains provider messages, triggers, account IDs, URLs, request payloads or tokens. The UI
+  gives separate localized recovery guidance for OAuth refresh, Ads-user access, customer/manager
+  hierarchy, missing `adwords` scope and Cloud-project access propagation.
+- The Google Ads request remains a read-only customer metadata query. No advertising mutation was
+  invoked. The owner must retry the authenticated check to obtain the newly classified provider
+  reason; this release does not claim that the external account permission issue is resolved.
+
+Release verification: all 387 backend tests and the production frontend build passed; eight
+targeted frontend runtime tests, Ruff and TypeScript also passed. Source `7ba76ce` was built by
+Cloud Build and deployed as `growthos-builder-cup-api-fix7ba76ce` with 100% default traffic.
+Firebase Hosting was published and pinned to that revision with tag `fh-3cb3b34d063185f5`.
+The existing runtime identity, CPU 1, memory 512 MiB, concurrency 20, maximum instances 2 and
+55-second timeout were preserved. Direct Cloud Run health and the Hosting capabilities rewrite
+both passed.
