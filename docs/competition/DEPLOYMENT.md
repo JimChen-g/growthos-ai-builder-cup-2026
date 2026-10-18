@@ -363,3 +363,55 @@ Runtime identity, secret references, CPU 1, memory 512 MiB, max instances 2, con
 and 55-second timeout were preserved. No advertising mutations were invoked. Today briefing
 enrichment, COOP warning cleanup, fresh-browser OAuth acceptance and independent platform
 reconciliation remain explicitly outside this completed release's verified claims.
+
+### Merged independent-review follow-up, 2026-10-18
+
+Application commit `e46977e36a6ecd96d934454934c4262cec6358af` addresses the independent
+review's R3–R6 and N1–N3, adds seven-day expiry guidance for R2 without extending retention,
+and adds regression coverage for the already-corrected Sample MRR consistency (P7).
+The issue-by-issue assessment and remaining boundaries are recorded in
+[the follow-up report](REVIEW_FOLLOWUP_2026-10-18.md).
+
+- Live Growth now distinguishes absent baselines/ad activity from measured poor performance.
+  Missing required inputs yield a null score/risk band, not a fabricated zero or reweighted score.
+  Historical scores are retained unchanged. Planning/approval paths reject unavailable baselines.
+- Live Customers and its history lead with result counts and source breakdowns, not heuristic
+  sentiment. Unverified, undisambiguated sentiment and inferred advice are collapsed and labelled.
+- AI reads have a per-workspace limit of three within the existing per-process total of six.
+  Serial Perplexity requests share the remaining 40-second budget; no automatic retries or new
+  quota allowances are added. This is not a cross-instance global scheduler.
+- Hosting predeploy rejects CI placeholder/stale/mismatched client configuration in the actual
+  built artifact. `/release-config.json` contains only four already-public Firebase client values.
+
+Cloud Build `032c384a-a3cf-467e-907a-f39bc08ea96a` succeeded. Image digest:
+`sha256:605af9b07ba42f58674442c81df53e13122630dc36c3e9f2c2d4768128948d84`.
+Cloud Run revision `growthos-builder-cup-api-fixe46977e` is ready with 100% default traffic.
+Hosting version `bb2ef4efa1d55dd4` was released at `2026-10-18T12:43:51.751Z`; tag
+`fh-bb2ef4efa1d55dd4` points to that exact revision. Public homepage, Connections HTML and
+release-config hashes match the local production build. Capabilities returned 200; unauthenticated
+Connections returned 401. Existing runtime identity, secret reference, retention and resource
+bounds were preserved. Deployment network resets were recovered without changing TLS or IAM.
+
+All **460 backend tests**, **82 frontend tests**, Ruff, TypeScript, production build and
+[GitHub CI](https://github.com/JimChen-g/growthos-ai-builder-cup-2026/actions/runs/39127344234)
+passed. The final build guard verified four Firebase fields against 19 client JavaScript chunks.
+
+Authenticated post-release browser verification:
+
+- Existing owner session restored; Today and Connections loaded correctly. Counts remained
+  3/3 business, 3/3 AI and 2/2 voice, with one logical Gemini connection and unchanged expiry.
+- One explicit Growth read at 12:53 UTC succeeded for all three business providers, with zero
+  monetary values and an unavailable growth score/risk band. English and both Chinese variants
+  correctly display the new state and audit text. Stripe/Google remain test; Meta is unconfirmed.
+- A new public Intercom lookup returned ten X and ten Reddit results. New and previous history
+  use counts/source breakdowns; heuristic sentiment is collapsed. Irrelevant same-name results
+  still exist and are explicitly not presented as verified customer feedback.
+- A new Intercom Visibility scan at 13:01 UTC measured **9/9**, three per provider (OpenAI,
+  Gemini Vertex, Perplexity), with one Gemini path. The displayed visibility score was 62/100;
+  stochastic answer changes mean it need not match an earlier score.
+
+No advertising mutations, credential saves or expiry extensions occurred. Eight individual
+connection-test buttons were not redundantly rerun; the actual Growth/Customers/Visibility reads
+above exercised those providers. Fresh interactive OAuth and online adversarial cross-user tests
+were not repeated in this release. Independent platform amount reconciliation remains unperformed.
+Today briefing enrichment and COOP warning cleanup stay deferred by the owner's instruction.
