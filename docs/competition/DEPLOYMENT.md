@@ -262,3 +262,12 @@ required for real-data acceptance. No advertising writes were invoked during acc
 - Release checks: 386 backend tests, 51 frontend tests, Ruff, TypeScript and production build.
   These tests do not establish current real-provider credential validity; expired OAuth access
   tokens still require renewal by their owner. No advertising mutations are used in acceptance.
+
+Published source `643f853` as Cloud Run revision `growthos-builder-cup-api-fix643f853`, with
+100% default traffic. Hosting was republished and pinned to the same revision with tag
+`fh-4094b6a7ab07ed8e`. No explicit API-version environment override is present, so the deployed
+REST client uses v26. Runtime identity, resources, scaling and secret references were preserved.
+Health/capabilities passed and unauthenticated Connections remained protected (401).
+The authenticated public Connections page loaded successfully; its new backend setup step and
+optional-token form were verified in English, Simplified Chinese and Traditional Chinese.
+No production credential form was submitted or existing credential rewritten during verification.
