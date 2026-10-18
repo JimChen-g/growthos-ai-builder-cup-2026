@@ -122,6 +122,12 @@ const BUSINESS_SOURCES = [
 function liveError(caught: unknown): MessageKey {
   if (caught instanceof ApiError) {
     if ([401, 403].includes(caught.status)) return "live.authRequired";
+    if (caught.status === 502) {
+      // Map only known server-authored diagnostics; never display raw provider text.
+      if (caught.message.includes("Google Ads sign-in has expired or lost permission.")) return "growth.live.googleAuthFailed";
+      if (caught.message.includes("Stripe rejected the saved credentials.")) return "growth.live.stripeAuthFailed";
+      if (caught.message.includes("Meta Ads rejected the saved credentials.")) return "growth.live.metaAuthFailed";
+    }
     if (caught.message.includes("requires matching Google Ads and Meta Ads currencies")) return "growth.live.currencyMismatch";
     if (caught.message.includes("account currency does not match")) return "connections.currencyMismatch";
     if (caught.message.includes("reporting timezone")) return "growth.live.timezoneUnavailable";

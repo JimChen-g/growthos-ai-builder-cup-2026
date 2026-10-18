@@ -42,3 +42,4 @@ auth-cache/
 dist/
 build/
 work/
+.firebase/

@@ -158,6 +158,26 @@ test("Growth surfaces safe status-specific 401/403/404/409/429 guidance", async 
   }
 });
 
+test("Growth translates known provider credential failures without exposing raw errors or confusing app login", async () => {
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    for (const [message, key] of [
+      ["Google Ads sign-in has expired or lost permission.", "growth.live.googleAuthFailed"],
+      ["Stripe rejected the saved credentials.", "growth.live.stripeAuthFailed"],
+      ["Meta Ads rejected the saved credentials.", "growth.live.metaAuthFailed"],
+    ]) {
+      for (const status of [502, 403]) {
+        const h = harness("app/dashboard/page.tsx", "LiveGrowth", readyState(), { requestJson: async () => { throw new ApiError(`${message} private-provider-detail`, status); } }, language);
+        await loadButton(h.render()).props.onClick();
+        const expected = status === 403 ? "live.authRequired" : key;
+        assert.equal(h.state[2], expected);
+        assert.ok(h.messages[expected]);
+        assert.ok(text(h.render()).includes(h.messages[expected]));
+        assert.doesNotMatch(text(h.render()), /private-provider-detail/);
+      }
+    }
+  }
+});
+
 const stripe = { provider: "stripe", state: "needs_configuration", display_name: "Stripe", setup_label: "", note: "", setup_steps: [], accounts: [], configured: false, supports_live_test: true, currency: "CNY" };
 const rowState = (currency = "CNY") => ["rk_test", {}, {}, false, "", null, false, currency, 0];
 const submit = (view) => nodes(view).find((n) => n?.type === "form").props.onSubmit({ preventDefault() {} });
