@@ -1340,6 +1340,42 @@ def _safe_provider_error(error: Exception) -> str:
         if isinstance(error, IntegrationAPIError)
         else (error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None)
     )
+    if isinstance(error, IntegrationAPIError) and error.provider == "google_ads":
+        if error.operation == "oauth_refresh":
+            return (
+                "Google OAuth could not refresh this connection. Reauthorize Google Ads "
+                "and save a matching client ID, client secret and refresh token."
+            )
+        if error.error_code in {"USER_PERMISSION_DENIED", "CUSTOMER_NOT_FOUND"}:
+            return (
+                "Google OAuth succeeded, but the authorized user cannot read this customer ID. "
+                "Confirm the target account; if it is reached through a manager account, enter "
+                "that manager customer ID."
+            )
+        if error.error_code == "NOT_ADS_USER":
+            return (
+                "Google OAuth succeeded, but the authorizing Google user has no Google Ads "
+                "account access. Authorize with a Google Ads user."
+            )
+        if error.error_code == "ACCESS_TOKEN_SCOPE_INSUFFICIENT":
+            return (
+                "Google OAuth succeeded without the Google Ads scope. Reauthorize with the "
+                "adwords scope and save the new refresh token."
+            )
+        if error.error_code in {
+            "CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION",
+            "DEVELOPER_TOKEN_NOT_APPROVED",
+        }:
+            return (
+                "Google OAuth succeeded, but the OAuth client project is not approved for this "
+                "Ads account. Confirm Explorer or higher API access and retry after it propagates."
+            )
+        if error.operation == "account_metadata" and status == 403:
+            return (
+                "Google OAuth succeeded, but Google Ads denied access to this customer. Confirm "
+                "the customer ID, the authorizing user's Ads access and any manager customer ID; "
+                "new Explorer access may also need time to propagate."
+            )
     if status in {401, 403}:
         return "The provider rejected this connection. Check your credentials and account access."
     if status == 429:

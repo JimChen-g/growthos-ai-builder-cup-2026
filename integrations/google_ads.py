@@ -39,6 +39,15 @@ from integrations.models import (
 RSA_HEADLINE_MAX = 30
 RSA_DESCRIPTION_MAX = 90
 _MUTATE_RESULT_KEYS = ("campaignBudgetResult", "campaignResult", "adGroupResult", "adGroupAdResult")
+_SAFE_GOOGLE_ERROR_KEYS = frozenset(
+    {
+        "authenticationError",
+        "authorizationError",
+        "customerError",
+        "quotaError",
+        "requestError",
+    }
+)
 
 
 class GoogleAdsIntegrationConfig(BaseModel):
@@ -221,6 +230,8 @@ class GoogleAdsIntegration:
             f"{str(self.config.api_base_url).rstrip('/')}/{self.config.api_version}"
             f"/customers/{self.config.customer_id}/googleAds:search",
             headers=await self._headers(),
+            operation="account_metadata",
+            safe_error_code_keys=_SAFE_GOOGLE_ERROR_KEYS,
             json={
                 "query": (
                     "SELECT customer.id, customer.currency_code, customer.time_zone, "
@@ -355,6 +366,8 @@ class GoogleAdsIntegration:
             "POST",
             url,
             headers=headers,
+            operation="campaign_mutation",
+            safe_error_code_keys=_SAFE_GOOGLE_ERROR_KEYS,
             json=payload,
         )
         if not isinstance(response, dict) or not isinstance(
@@ -417,6 +430,8 @@ class GoogleAdsIntegration:
             "POST",
             url,
             headers=headers,
+            operation="reporting",
+            safe_error_code_keys=_SAFE_GOOGLE_ERROR_KEYS,
             json={"query": query},
         )
         if not isinstance(payload, list):
@@ -443,6 +458,7 @@ class GoogleAdsIntegration:
                 self.provider,
                 "POST",
                 str(self.config.oauth_token_url),
+                operation="oauth_refresh",
                 data={
                     "client_id": self.config.oauth_client_id,
                     "client_secret": self.config.oauth_client_secret.get_secret_value(),

@@ -39,6 +39,21 @@ function connectionError(caught: unknown): MessageKey {
   return "live.requestError";
 }
 
+function connectionTestMessage(test: ConnectionTestResult): MessageKey {
+  if (test.success) return test.checked_live ? "connections.testPassed" : "connections.configuredOnly";
+  if (test.message.includes("account currency does not match")) return "connections.currencyMismatch";
+  if (test.message.includes("reporting timezone")) return "growth.live.timezoneUnavailable";
+  if (test.message.includes("could not refresh")) return "connections.googleOAuthRefreshFailed";
+  if (
+    test.message.includes("cannot read this customer ID") ||
+    test.message.includes("denied access to this customer")
+  ) return "connections.googleAccountAccessFailed";
+  if (test.message.includes("has no Google Ads account access")) return "connections.googleUserAccessFailed";
+  if (test.message.includes("without the Google Ads scope")) return "connections.googleScopeFailed";
+  if (test.message.includes("not approved for this Ads account")) return "connections.googleProjectAccessFailed";
+  return "connections.testFailed";
+}
+
 export default function ConnectionsPage() {
   const { mode, identity, session } = useDataMode();
   const { t } = useI18n();
@@ -298,7 +313,7 @@ function ConnectionRow({ item, onChanged }: { item: ConnectionStatus; onChanged:
               >
                 {busy ? t("connections.testing") : t("connections.test")}
               </button>
-              {test && <span className={`note ${test.success ? "" : "warn"}`}>{t(test.success ? test.checked_live ? "connections.testPassed" : "connections.configuredOnly" : test.message.includes("account currency does not match") ? "connections.currencyMismatch" : test.message.includes("reporting timezone") ? "growth.live.timezoneUnavailable" : "connections.testFailed")}</span>}
+              {test && <span className={`note ${test.success ? "" : "warn"}`}>{t(connectionTestMessage(test))}</span>}
               {test?.checked_at && <small>{t("connections.checkedAt", { time: formatTimestamp(test.checked_at, locale) })}</small>}
               {test && BUSINESS_PROVIDERS.includes(item.provider) && <small>{t(`environment.${test.account_environment ?? "unknown"}` as MessageKey)}</small>}
             </div>

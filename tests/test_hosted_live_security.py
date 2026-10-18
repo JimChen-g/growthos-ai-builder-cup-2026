@@ -395,3 +395,34 @@ def test_integration_error_legacy_detail_argument_is_sanitized():
     error = IntegrationAPIError("openai", 401, "Rejected", detail="sensitive-provider-body")
     assert error.detail == "HTTP 401"
     assert "sensitive-provider-body" not in repr(error.__dict__)
+
+
+async def test_provider_failure_keeps_only_allowlisted_enum_and_operation(caplog):
+    secret = "private-customer-id-and-message"
+
+    def fail(_request):
+        return httpx.Response(
+            403,
+            json={
+                "error": {
+                    "message": secret,
+                    "details": [{"errors": [{"errorCode": {
+                        "authorizationError": "USER_PERMISSION_DENIED"
+                    }, "trigger": secret}]}],
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fail)) as api:
+        with pytest.raises(IntegrationAPIError) as caught:
+            await request_json(
+                api,
+                "google_ads",
+                "POST",
+                "https://example.test",
+                operation="account_metadata",
+                safe_error_code_keys=frozenset({"authorizationError"}),
+            )
+    assert caught.value.operation == "account_metadata"
+    assert caught.value.error_code == "USER_PERMISSION_DENIED"
+    assert secret not in caplog.text + str(caught.value) + repr(caught.value.__dict__)

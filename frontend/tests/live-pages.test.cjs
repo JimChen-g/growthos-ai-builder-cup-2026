@@ -218,6 +218,27 @@ test("a failed live connection test explains a known currency mismatch without e
   assert.ok(text(view).includes(h.messages["connections.currencyMismatch"]));
 });
 
+test("Google Ads checks distinguish OAuth, account, user, scope and project access safely", () => {
+  const cases = [
+    ["Google OAuth could not refresh this connection.", "connections.googleOAuthRefreshFailed"],
+    ["Google OAuth succeeded, but the authorized user cannot read this customer ID.", "connections.googleAccountAccessFailed"],
+    ["Google OAuth succeeded, but Google Ads denied access to this customer.", "connections.googleAccountAccessFailed"],
+    ["Google OAuth succeeded, but the authorizing Google user has no Google Ads account access.", "connections.googleUserAccessFailed"],
+    ["Google OAuth succeeded without the Google Ads scope.", "connections.googleScopeFailed"],
+    ["Google OAuth succeeded, but the OAuth client project is not approved for this Ads account.", "connections.googleProjectAccessFailed"],
+  ];
+  for (const language of ["en", "zh-Hans", "zh-Hant"]) {
+    for (const [message, key] of cases) {
+      const initial = rowState();
+      initial[5] = { success: false, checked_live: true, message };
+      const h = harness("app/connections/page.tsx", "ConnectionRow", initial, {}, language);
+      const view = h.render({ item: { ...stripe, provider: "google_ads", configured: true }, onChanged: async () => {} });
+      assert.ok(text(view).includes(h.messages[key]), `${language}: ${key}`);
+      assert.doesNotMatch(text(view), /private|trigger|customer-id-and-message/);
+    }
+  }
+});
+
 test("each business connector sends its explicit currency and incomplete currency blocks saving", async () => {
   const h = harness("app/connections/page.tsx", "ConnectionRow", rowState(""), { requestJson: async () => ({}) });
   const view = h.render({ item: stripe, onChanged: async () => {} });
@@ -319,7 +340,7 @@ test("Google Ads optional legacy-token explanation is localized and accessible i
 test("new readiness, currency and auth recovery messages exist in all supported languages", () => {
   for (const language of ["en", "zh-Hans", "zh-Hant"]) {
     const messages = require(path.join(frontend, `lib/i18n/ui.${language}.json`));
-    for (const key of ["auth.expiredTitle", "auth.expiredBody", "auth.reauth", "live.authRequired", "growth.live.missingSources", "growth.live.auditNotSaved", "connections.currency", "connections.refreshFailed"]) assert.ok(messages[key], `${language}: ${key}`);
+    for (const key of ["auth.expiredTitle", "auth.expiredBody", "auth.reauth", "live.authRequired", "growth.live.missingSources", "growth.live.auditNotSaved", "connections.currency", "connections.refreshFailed", "connections.googleOAuthRefreshFailed", "connections.googleAccountAccessFailed", "connections.googleUserAccessFailed", "connections.googleScopeFailed", "connections.googleProjectAccessFailed"]) assert.ok(messages[key], `${language}: ${key}`);
   }
 });
 
