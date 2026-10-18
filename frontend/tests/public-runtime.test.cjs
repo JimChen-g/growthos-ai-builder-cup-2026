@@ -28,6 +28,7 @@ function loadAuth(auth, signIn, options = {}) {
       if (name === "@firebase/auth") return {
         getAuth: () => auth, signInAnonymously: signIn,
         GoogleAuthProvider: class { setCustomParameters() {} },
+        signInWithRedirect: () => assert.fail("redirect not expected"),
         ...options.firebase,
       };
       throw new Error(`Unexpected import: ${name}`);
@@ -97,21 +98,26 @@ test("Live token comes from the formal user and is discarded if identity changes
   await assert.rejects(getToken(true, true), /identity-changing/);
 });
 
-test("Google popup opens in the click gesture and unsupported popups time out without blocking retry", async () => {
+test("Google popup opens in the click gesture and unsupported popups fall back to redirect", async () => {
   const timers = [];
   const popups = [];
+  let redirects = 0;
   const auth = { currentUser: { uid: "anonymous", isAnonymous: true, getIdToken: async () => "anon-token" }, authStateReady: async () => {} };
   const module = loadAuth(auth, () => assert.fail("no anonymous sign-in needed"), {
     setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
     clearTimeout: () => {},
-    firebase: { signInWithPopup: () => new Promise((resolve) => popups.push(resolve)) },
+    firebase: {
+      signInWithPopup: () => new Promise((resolve) => popups.push(resolve)),
+      signInWithRedirect: async () => { redirects += 1; },
+    },
   });
   const first = module.signInWithGoogle();
   assert.equal(popups.length, 1, "popup must open synchronously before any await");
-  assert.equal(timers[0].delay, 45000);
+  assert.equal(timers[0].delay, 12000);
   await assert.rejects(module(), /identity-changing/);
   timers[0].callback();
-  await assert.rejects(first, /popup-timeout/);
+  await first;
+  assert.equal(redirects, 1);
   assert.equal(await module(), "anon-token", "a blocked popup must not hold the identity lock forever");
   const retry = module.signInWithGoogle();
   assert.equal(popups.length, 2);
@@ -121,6 +127,19 @@ test("Google popup opens in the click gesture and unsupported popups time out wi
   popups[1]({ user: auth.currentUser });
   await retry;
   assert.equal(await module(), "anon-token");
+});
+
+test("Google popup cancellation remains a user-visible error and does not force redirect", async () => {
+  let redirects = 0;
+  const auth = { currentUser: { uid: "anonymous", isAnonymous: true }, authStateReady: async () => {} };
+  const module = loadAuth(auth, () => assert.fail("no anonymous sign-in needed"), {
+    firebase: {
+      signInWithPopup: async () => { throw Object.assign(new Error("closed"), { code: "auth/popup-closed-by-user" }); },
+      signInWithRedirect: async () => { redirects += 1; },
+    },
+  });
+  await assert.rejects(module.signInWithGoogle(), /closed/);
+  assert.equal(redirects, 0);
 });
 
 test("pending interactive authentication keeps visible sign-in guidance instead of a loading-only screen", () => {

@@ -292,3 +292,20 @@ Firebase Hosting was published and pinned to that revision with tag `fh-3cb3b34d
 The existing runtime identity, CPU 1, memory 512 MiB, concurrency 20, maximum instances 2 and
 55-second timeout were preserved. Direct Cloud Run health and the Hosting capabilities rewrite
 both passed.
+
+### Firebase login build correction, 2026-10-18
+
+- The preceding Hosting release was built without the four public `NEXT_PUBLIC_FIREBASE_*`
+  identifiers. Tabs that had already initialized Firebase could continue to use their restored
+  identity, but a refresh or clean browser could not initialize Google sign-in. Cloud Run and the
+  owner's private workspace records were unaffected.
+- The frontend was rebuilt from the active Firebase Web App SDK configuration and republished.
+  The deployed bundle was checked for the project ID, auth domain, app ID and API-key presence
+  without printing the API key. An authenticated refresh restored the owner's private Connections
+  workspace and its saved connection status.
+- Popup-blocked and unsupported-browser errors now fall back to Firebase's full-page Google
+  redirect after a bounded 12-second wait. User cancellation remains a normal visible error and
+  does not force a redirect.
+- Production builds now fail before emitting Hosting files when any required public Firebase
+  identifier is absent. These identifiers are public Firebase client configuration, not provider
+  credentials; business tokens and the connection-vault key remain server-side.

@@ -1,14 +1,27 @@
 import { type FirebaseApp, getApp, getApps, initializeApp } from "@firebase/app";
 import {
   type User, GoogleAuthProvider, getAuth, onAuthStateChanged, signInAnonymously,
-  signInWithPopup, signOut,
+  signInWithPopup, signInWithRedirect, signOut,
 } from "@firebase/auth";
 
 let signInPromise: Promise<User> | null = null;
 let identityEpoch = 0;
 let identityChanging = false;
 let interactiveAttempt = 0;
-const POPUP_WAIT_MS = 45000;
+const POPUP_WAIT_MS = 12000;
+
+function authErrorCode(error: unknown): string {
+  if (!error || typeof error !== "object" || !("code" in error)) return "";
+  return typeof error.code === "string" ? error.code : "";
+}
+
+function shouldUseRedirect(error: unknown): boolean {
+  const code = authErrorCode(error);
+  return code === "auth/popup-blocked"
+    || code === "auth/operation-not-supported-in-this-environment"
+    || code === "auth/web-storage-unsupported"
+    || code === "auth/popup-timeout";
+}
 
 function configuredApp(): FirebaseApp | null {
   const config = {
@@ -53,13 +66,21 @@ export async function signInWithGoogle(): Promise<void> {
     provider.setCustomParameters({ prompt: "select_account" });
     // Invoke synchronously from the user gesture. Some embedded browsers never
     // resolve unsupported popups, so waiting must have a visible, bounded exit.
-    const popup = signInWithPopup(getAuth(app), provider);
-    await Promise.race([
-      popup,
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => reject(new Error("auth/popup-timeout")), POPUP_WAIT_MS);
-      }),
-    ]);
+    const auth = getAuth(app);
+    try {
+      const popup = signInWithPopup(auth, provider);
+      await Promise.race([
+        popup,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(Object.assign(new Error("auth/popup-timeout"), { code: "auth/popup-timeout" })), POPUP_WAIT_MS);
+        }),
+      ]);
+    } catch (error) {
+      if (!shouldUseRedirect(error)) throw error;
+      // Popup-blocking and embedded-browser restrictions are common. A full-page
+      // redirect preserves the same Firebase identity and returns to this route.
+      await signInWithRedirect(auth, provider);
+    }
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
     if (attempt === interactiveAttempt) identityChanging = false;
